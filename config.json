@@ -1,0 +1,39 @@
+{
+  "target_window": {
+    "enabled": true,
+    "title_keyword": "pokelit",
+    "hwnd": null,
+    "focus_flick_on_select": true
+  },
+  "movement": {
+    "keys": ["w", "a", "s", "d"],
+    "min_hold_seconds": 0.1,
+    "max_hold_seconds": 1.5,
+    "repeat_interval_seconds": 0.035,
+    "switch_breather_seconds": 0.03
+  },
+  "level_up": {
+    "confidence_threshold": 0.78,
+    "choice_strategy": "1",
+    "key_press_hold_seconds": 0.08,
+    "post_detection_settle_seconds": 0.25,
+    "post_selection_wait_seconds": 0.4,
+    "max_selection_wait_seconds": 2.0,
+    "poll_interval_seconds": 0.12,
+    "priority_list": []
+  },
+  "item_window": {
+    "choice_2_options": "2",
+    "choice_3_options": "3"
+  },
+  "rift_navigation": {
+    "enabled": true,
+    "confidence_threshold": 0.75
+  },
+  "hotkeys": {
+    "start": "f8",
+    "emergency_stop": "f9",
+    "quit": "f10",
+    "test_scan": "f7"
+  }
+}
