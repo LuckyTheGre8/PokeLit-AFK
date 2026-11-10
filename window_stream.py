@@ -22,6 +22,8 @@ gdi32 = ctypes.windll.gdi32
 WM_KEYDOWN = 0x0100
 WM_KEYUP = 0x0101
 WM_CHAR = 0x0102
+WM_LBUTTONDOWN = 0x0201
+WM_LBUTTONUP = 0x0202
 PW_RENDERFULLCONTENT = 0x00000002
 
 # Virtual Key Mapping
@@ -170,11 +172,13 @@ class WindowInput:
 
         return children[0] if children else self.hwnd
 
-    def key_down(self, key_str: str) -> None:
+    def key_down(self, key_str: str, is_repeat: bool = False) -> None:
         """Send WM_KEYDOWN to target window."""
         vk = VK_CODES.get(key_str.lower(), ord(key_str.upper()))
         scan = user32.MapVirtualKeyW(vk, 0)
         lparam = 1 | (scan << 16)
+        if is_repeat:
+            lparam |= (1 << 30)  # Bit 30 = previous key state was down (typematic repeat)
         user32.PostMessageW(self.target_hwnd, WM_KEYDOWN, vk, lparam)
         if self.target_hwnd != self.hwnd:
             user32.PostMessageW(self.hwnd, WM_KEYDOWN, vk, lparam)
@@ -193,3 +197,20 @@ class WindowInput:
         self.key_down(key_str)
         time.sleep(hold_duration)
         self.key_up(key_str)
+
+    def client_to_screen(self, client_x: int, client_y: int) -> tuple[int, int]:
+        """Convert window client coordinates to screen coordinates."""
+        pt = wintypes.POINT(int(client_x), int(client_y))
+        user32.ClientToScreen(self.hwnd, ctypes.byref(pt))
+        return pt.x, pt.y
+
+    def click(self, client_x: int, client_y: int) -> None:
+        """Send WM_LBUTTONDOWN and WM_LBUTTONUP directly to target window at client coordinates."""
+        lparam = (int(client_y) << 16) | (int(client_x) & 0xFFFF)
+        user32.PostMessageW(self.target_hwnd, WM_LBUTTONDOWN, 0x0001, lparam)
+        time.sleep(0.06)
+        user32.PostMessageW(self.target_hwnd, WM_LBUTTONUP, 0x0000, lparam)
+        if self.target_hwnd != self.hwnd:
+            user32.PostMessageW(self.hwnd, WM_LBUTTONDOWN, 0x0001, lparam)
+            time.sleep(0.06)
+            user32.PostMessageW(self.hwnd, WM_LBUTTONUP, 0x0000, lparam)

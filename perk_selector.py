@@ -32,7 +32,23 @@ from pathlib import Path
 import pyautogui
 from pynput import keyboard
 
-from level_detector import DetectionResult, LevelUpDetector, ModalType, PerkSelector, RiftDetector, RiftResult, ScreenGrabber
+from level_detector import (
+    AutoVigorDetector,
+    AutoVigorResult,
+    DetectionResult,
+    GameTimerDetector,
+    GameTimerResult,
+    LevelUpDetector,
+    MenuDetectionResult,
+    MenuNavigatorDetector,
+    MenuScreenType,
+    ModalType,
+    PerkSelector,
+    RiftDetector,
+    RiftResult,
+    ScreenGrabber,
+)
+from spatial_navigator import SpatialNavigator, SpatialNavResult
 from window_stream import WindowCapture, WindowInput, find_target_window
 
 pyautogui.FAILSAFE = True
@@ -71,6 +87,16 @@ def load_config() -> dict:
             "enabled": True,
             "confidence_threshold": 0.75,
         },
+        "auto_vigor": {
+            "enabled": True,
+            "trigger_minutes": 10.0,
+            "use_game_timer": True,
+        },
+        "auto_restart": {
+            "enabled": True,
+            "region": "kanto",
+            "post_click_delay_seconds": 1.2,
+        },
     }
     if CONFIG_FILE.exists():
         try:
@@ -106,6 +132,16 @@ ITEM_CHOICE_3 = ITEM_CFG.get("choice_3_options", "3")
 RIFT_CFG = CONFIG.get("rift_navigation", {})
 RIFT_ENABLED = RIFT_CFG.get("enabled", True)
 
+AV_CFG = CONFIG.get("auto_vigor", {})
+AV_ENABLED = AV_CFG.get("enabled", True)
+AV_TRIGGER_MIN = float(AV_CFG.get("trigger_minutes", 10.0))
+AV_USE_GAME_TIMER = AV_CFG.get("use_game_timer", True)
+
+AR_CFG = CONFIG.get("auto_restart", {})
+AR_ENABLED = AR_CFG.get("enabled", True)
+AR_REGION = AR_CFG.get("region", "kanto")
+AR_DELAY = float(AR_CFG.get("post_click_delay_seconds", 1.2))
+
 running = threading.Event()
 shutdown = threading.Event()
 lock = threading.Lock()
@@ -113,6 +149,13 @@ monitor_thread: threading.Thread | None = None
 
 detector = LevelUpDetector(confidence_threshold=CONF_THRESH)
 rift_detector = RiftDetector()
+timer_detector = GameTimerDetector()
+auto_vigor_detector = AutoVigorDetector()
+menu_detector = MenuNavigatorDetector()
+spatial_nav = SpatialNavigator()
+
+match_start_time: float = time.monotonic()
+auto_vigor_active: bool = False
 selector = PerkSelector(
     strategy=CHOICE_STRAT,
     key_hold_seconds=KEY_HOLD_SEC,
@@ -191,6 +234,39 @@ def execute_choice(choice: str) -> None:
         selector.tap_choice(choice)
 
 
+def execute_click(norm_x: int, norm_y: int) -> None:
+    """Click at normalized (1024x640) coordinate on target window or screen."""
+    global active_hwnd, active_win_input
+
+    if active_hwnd and active_win_input:
+        rect = wintypes.RECT()
+        user32.GetClientRect(active_hwnd, ctypes.byref(rect))
+        cw = max(1, rect.right - rect.left)
+        ch = max(1, rect.bottom - rect.top)
+
+        client_x = int(norm_x * (cw / 1024.0))
+        client_y = int(norm_y * (ch / 640.0))
+        screen_x, screen_y = active_win_input.client_to_screen(client_x, client_y)
+
+        if FOCUS_FLICK:
+            prev_fg = user32.GetForegroundWindow()
+            try:
+                user32.SetForegroundWindow(active_hwnd)
+                time.sleep(0.04)
+                pyautogui.click(screen_x, screen_y)
+                active_win_input.click(client_x, client_y)
+            finally:
+                if prev_fg and prev_fg != active_hwnd:
+                    user32.SetForegroundWindow(prev_fg)
+        else:
+            active_win_input.click(client_x, client_y)
+    else:
+        sw, sh = pyautogui.size()
+        screen_x = int(norm_x * (sw / 1024.0))
+        screen_y = int(norm_y * (sh / 640.0))
+        pyautogui.click(screen_x, screen_y)
+
+
 def monitor_loop() -> None:
     """Background screen monitoring loop for modals and rift navigation."""
     global active_cap, active_win_input, active_hwnd
@@ -203,11 +279,15 @@ def monitor_loop() -> None:
 
     print(f"Level-Up Strategy: Option [{selector.strategy.upper()}] (taps 1, 2, or 3)")
     print(f"Item Strategy:     2-Options -> [{selector.item_choice_2}] | 3-Options -> [{selector.item_choice_3}]")
-    print(f"Rift Navigation:   {'ENABLED (Auto-steers to purple arrow)' if RIFT_ENABLED else 'DISABLED'}")
+    print(f"Rift Navigation:   {'ENABLED (Auto-steers to purple arrow/tear)' if RIFT_ENABLED else 'DISABLED'}")
+    print(f"Auto Vigor:        {'ENABLED (Activates at 10:00 on timer)' if AV_ENABLED else 'DISABLED'}")
+    print(f"Auto Restart:      {'ENABLED (Back to menu -> Play -> Kanto)' if AR_ENABLED else 'DISABLED'}")
     print("Press [F9] to stop | [F7] for test scan.\n")
 
     modals_handled = 0
     rift_active_logged = False
+    last_rift_seen_time = 0.0
+    global auto_vigor_active
 
     try:
         while running.is_set() and not shutdown.is_set():
@@ -219,12 +299,53 @@ def monitor_loop() -> None:
             try:
                 frame = active_cap.grab_bgr()
 
+                # 0. Menu & Match End Navigation ("Run over" -> "Back to menu" -> "Play" -> "Kanto")
+                if AR_ENABLED:
+                    menu_res: MenuDetectionResult = menu_detector.detect(frame)
+                    if menu_res.screen_type != MenuScreenType.NONE and menu_res.click_point:
+                        set_pause(True)
+                        set_rift_movement(False)
+
+                        if menu_res.screen_type == MenuScreenType.RUN_OVER:
+                            print(f"\n==================================================")
+                            print(f" [RUN OVER DETECTED] Match has ended!")
+                            print(f" -> Clicking 'Back to menu' button at {menu_res.click_point}...")
+                            execute_click(menu_res.click_point[0], menu_res.click_point[1])
+                            time.sleep(AR_DELAY)
+                            print("==================================================\n")
+                            continue
+
+                        elif menu_res.screen_type == MenuScreenType.MAIN_MENU:
+                            print(f"\n==================================================")
+                            print(f" [MAIN MENU DETECTED]")
+                            print(f" -> Clicking 'Play' (Enter dungeon) at {menu_res.click_point}...")
+                            execute_click(menu_res.click_point[0], menu_res.click_point[1])
+                            time.sleep(AR_DELAY)
+                            print("==================================================\n")
+                            continue
+
+                        elif menu_res.screen_type == MenuScreenType.CHOOSE_REGION:
+                            print(f"\n==================================================")
+                            print(f" [CHOOSE REGION DETECTED]")
+                            print(f" -> Selecting '{AR_REGION.capitalize()}' region at {menu_res.click_point}...")
+                            execute_click(menu_res.click_point[0], menu_res.click_point[1])
+                            print(f" -> Starting new match in {AR_REGION.capitalize()} (waiting 2.5s)...")
+                            time.sleep(2.5)
+
+                            # Reset match start time and Auto Vigor flag for the fresh game
+                            match_start_time = time.monotonic()
+                            auto_vigor_active = False
+
+                            set_pause(False)
+                            print(f" [NEW MATCH STARTED] Movement and perk selection active!")
+                            print("==================================================\n")
+                            continue
+
                 # 1. First priority: Check for Level-Up or Item Modal
                 result: DetectionResult = detector.detect(frame)
 
                 if result.is_level_up:
-                    # Clear rift navigation while modal is active
-                    set_rift_movement(False)
+                    # Do NOT clear rift navigation file; only pause movement so rift heading is retained!
                     set_pause(True)
 
                     modals_handled += 1
@@ -262,25 +383,72 @@ def monitor_loop() -> None:
                         print(" -> [WARN] Modal dismissal wait timed out.")
 
                     time.sleep(POST_WAIT)
+
+                    # Seamless Rift Continuation: re-verify rift portal/arrow BEFORE unpausing
+                    if RIFT_ENABLED:
+                        fresh_frame = active_cap.grab_bgr()
+                        fresh_rift = rift_detector.detect(fresh_frame)
+                        if fresh_rift.is_active and fresh_rift.direction_keys:
+                            set_rift_movement(True, fresh_rift.direction_keys, fresh_rift.angle_deg)
+                            print(f" -> Rift path preserved: Steering {fresh_rift.direction_keys} (Angle: {fresh_rift.angle_deg}°)")
+                        else:
+                            set_rift_movement(False)
+
                     set_pause(False)
                     print(" Resuming movement loop.")
                     print("==================================================\n")
                     continue
 
-                # 2. Second priority: Rift Detection & Navigation
+                # 2. Check Auto Vigor trigger (10 minutes on timer or elapsed match time)
+                if AV_ENABLED and not auto_vigor_active:
+                    elapsed_min = (time.monotonic() - match_start_time) / 60.0
+                    timer_triggered = False
+                    if AV_USE_GAME_TIMER:
+                        t_res = timer_detector.detect(frame)
+                        if t_res.detected and t_res.is_at_least_10_min:
+                            timer_triggered = True
+
+                    if timer_triggered or (elapsed_min >= AV_TRIGGER_MIN):
+                        av_res = auto_vigor_detector.detect(frame)
+                        if av_res.is_present:
+                            if av_res.is_active:
+                                auto_vigor_active = True
+                                print("\n[AUTO VIGOR] Already active (pink button detected).")
+                            else:
+                                print(f"\n==================================================")
+                                timer_desc = "In-game timer >= 10:00" if timer_triggered else f"Elapsed match time: {elapsed_min:.1f}m"
+                                print(f"[AUTO VIGOR TRIGGERED] 10 minute mark reached! ({timer_desc})")
+                                print(f"Clicking AUTO VIGOR button at normalized {av_res.norm_point} (conf={av_res.confidence:.3f})...")
+                                execute_click(av_res.norm_point[0], av_res.norm_point[1])
+                                time.sleep(0.35)
+
+                                # Verify if click toggled AUTO VIGOR ON
+                                check_frame = active_cap.grab_bgr()
+                                check_av = auto_vigor_detector.detect(check_frame)
+                                if check_av.is_active:
+                                    auto_vigor_active = True
+                                    print(f"[AUTO VIGOR ENABLED] Auto Vigor successfully turned on (AUTO VIGOR ON confirmed)!")
+                                    print(f"All future level-ups will now be selected automatically by the game.")
+                                else:
+                                    print(f"[AUTO VIGOR] Click sent, will verify activation on next cycle...")
+                                print(f"==================================================\n")
+
+                # 3. Third priority: Rift Detection & Navigation (Top Gameplay Priority)
                 if RIFT_ENABLED:
                     rift_res: RiftResult = rift_detector.detect(frame)
                     if rift_res.is_active and rift_res.direction_keys:
+                        last_rift_seen_time = time.monotonic()
                         if not rift_active_logged:
                             rift_active_logged = True
                             desc = "Physical Portal Tear" if rift_res.mode == "portal_tear" else ("Arrow indicator" if rift_res.mode == "rift_arrow" else "Banner")
-                            print(f"[RIFT DETECTED] {desc} found at {rift_res.target_point} -> Steering {rift_res.direction_keys} (Angle: {rift_res.angle_deg}°)")
+                            print(f"[RIFT DETECTED - TOP PRIORITY] {desc} found at {rift_res.target_point} -> Steering {rift_res.direction_keys} (Angle: {rift_res.angle_deg}°)")
                         set_rift_movement(True, rift_res.direction_keys, rift_res.angle_deg)
                     else:
-                        if rift_active_logged:
-                            rift_active_logged = False
-                            print("[RIFT ENDED] Portal / Arrow cleared. Returning to random movement.")
-                        set_rift_movement(False)
+                        if time.monotonic() - last_rift_seen_time > 0.4:
+                            if rift_active_logged:
+                                rift_active_logged = False
+                                print("[RIFT ENDED] Portal / Arrow cleared. Returning to normal movement.")
+                            set_rift_movement(False)
 
             except Exception as exc:
                 print(f"[WARN] Detection error: {exc}")
@@ -295,12 +463,14 @@ def monitor_loop() -> None:
 
 def start() -> None:
     """Start monitor thread."""
-    global monitor_thread, active_cap, active_win_input, active_hwnd
+    global monitor_thread, active_cap, active_win_input, active_hwnd, match_start_time, auto_vigor_active
     with lock:
         if running.is_set():
             print("[INFO] Monitor is already running.")
             return
 
+        match_start_time = time.monotonic()
+        auto_vigor_active = False
         active_cap, active_win_input, active_hwnd = resolve_capture_and_input()
         running.set()
         monitor_thread = threading.Thread(target=monitor_loop, daemon=True, name="ModalMonitorThread")
@@ -335,6 +505,15 @@ def manual_test_scan() -> None:
         print(f"Rift Status: active = {rift_res.is_active} (mode = {rift_res.mode}, scores = {rift_res.scores})")
         if rift_res.is_active:
             print(f"  -> Steering Keys: {rift_res.direction_keys} (Angle: {rift_res.angle_deg}°, Target: {rift_res.target_point})")
+
+        t_res = timer_detector.detect(frame)
+        av_res = auto_vigor_detector.detect(frame)
+        m_res = menu_detector.detect(frame)
+        s_res = spatial_nav.analyze(frame)
+        print(f"Game Timer: detected = {t_res.detected}, minutes_cat = {t_res.minutes_category}, is_at_least_10_min = {t_res.is_at_least_10_min}")
+        print(f"Auto Vigor: present = {av_res.is_present}, is_active = {av_res.is_active}, norm_point = {av_res.norm_point}")
+        print(f"Menu Screen: {m_res.screen_type.value} (conf = {m_res.confidence}, click = {m_res.click_point})")
+        print(f"Spatial AI: mode = {s_res.mode}, keys = {s_res.direction_keys}, gems = {s_res.gems_detected}, max_threat = {s_res.max_threat_percent}%")
 
         print("-------------------------------\n")
     except Exception as exc:
