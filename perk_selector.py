@@ -310,6 +310,7 @@ def monitor_loop() -> None:
     modals_handled = 0
     rift_active_logged = False
     last_rift_seen_time = 0.0
+    last_vigor_toggle_time = 0.0
     global auto_vigor_active
 
     try:
@@ -422,35 +423,59 @@ def monitor_loop() -> None:
                     print("==================================================\n")
                     continue
 
-                # 2. Check Auto Vigor trigger (10 minutes on timer or elapsed match time)
-                if AV_ENABLED and not auto_vigor_active:
-                    elapsed_min = (time.monotonic() - match_start_time) / 60.0
-                    timer_triggered = False
+                # 2. Check Auto Vigor state:
+                # Rule: For the first 10 minutes on the timer, Auto Vigor MUST BE OFF (so bot selects level-up perks 1/2/3).
+                #       After 10:00 on the timer, Auto Vigor MUST BE ON (so game selects level-ups automatically).
+                if AV_ENABLED:
+                    is_past_10m = False
+                    timer_is_valid = False
+
                     if AV_USE_GAME_TIMER:
                         t_res = timer_detector.detect(frame)
-                        if t_res.detected and t_res.is_at_least_10_min:
-                            timer_triggered = True
+                        if t_res.detected:
+                            timer_is_valid = True
+                            is_past_10m = t_res.is_at_least_10_min
 
-                    if timer_triggered or (elapsed_min >= AV_TRIGGER_MIN):
-                        av_res = auto_vigor_detector.detect(frame)
-                        if av_res.is_present:
+                    if not timer_is_valid:
+                        elapsed_min = (time.monotonic() - match_start_time) / 60.0
+                        is_past_10m = (elapsed_min >= AV_TRIGGER_MIN)
+
+                    av_res = auto_vigor_detector.detect(frame)
+                    now_v = time.monotonic()
+                    if av_res.is_present and (now_v - last_vigor_toggle_time >= 1.5):
+                        if not is_past_10m:
+                            # BEFORE 10 MINUTES: Auto Vigor MUST be OFF so the bot can choose perks
+                            auto_vigor_active = False
                             if av_res.is_active:
-                                auto_vigor_active = True
-                                print("\n[AUTO VIGOR] Already active (pink button detected).")
-                            else:
+                                last_vigor_toggle_time = now_v
                                 print(f"\n==================================================")
-                                timer_desc = "In-game timer >= 10:00" if timer_triggered else f"Elapsed match time: {elapsed_min:.1f}m"
-                                print(f"[AUTO VIGOR TRIGGERED] 10 minute mark reached! ({timer_desc})")
-                                print(f"Clicking AUTO VIGOR button at normalized {av_res.norm_point} (conf={av_res.confidence:.3f})...")
-
-                                # Temporarily pause WASD movement so keystrokes do not interfere with mouse click
+                                print(f"[AUTO VIGOR] Timer is under 10:00, but Auto Vigor is currently ON (pink)!")
+                                print(f"Turning Auto Vigor OFF so the bot selects perks according to strategy [{selector.strategy}]...")
                                 set_pause(True)
                                 time.sleep(0.08)
-
                                 execute_click(av_res.norm_point[0], av_res.norm_point[1])
                                 time.sleep(0.35)
-
-                                # Verify if click toggled AUTO VIGOR ON
+                                check_frame = active_cap.grab_bgr()
+                                check_av = auto_vigor_detector.detect(check_frame)
+                                if not check_av.is_active:
+                                    print(f"[AUTO VIGOR] Auto Vigor successfully turned OFF for early game perk selection!")
+                                else:
+                                    print(f"[AUTO VIGOR] Retrying click to turn OFF...")
+                                    execute_click(av_res.norm_point[0], av_res.norm_point[1])
+                                    time.sleep(0.35)
+                                set_pause(False)
+                                print(f"==================================================\n")
+                        else:
+                            # AT OR AFTER 10 MINUTES: Auto Vigor MUST be ON so gameplay is uninterrupted
+                            if not av_res.is_active and not auto_vigor_active:
+                                last_vigor_toggle_time = now_v
+                                print(f"\n==================================================")
+                                print(f"[AUTO VIGOR TRIGGERED] 10 minute mark reached! In-game timer >= 10:00.")
+                                print(f"Clicking AUTO VIGOR button at normalized {av_res.norm_point} to turn ON...")
+                                set_pause(True)
+                                time.sleep(0.08)
+                                execute_click(av_res.norm_point[0], av_res.norm_point[1])
+                                time.sleep(0.35)
                                 check_frame = active_cap.grab_bgr()
                                 check_av = auto_vigor_detector.detect(check_frame)
                                 if check_av.is_active:
@@ -458,7 +483,7 @@ def monitor_loop() -> None:
                                     print(f"[AUTO VIGOR ENABLED] Auto Vigor successfully turned on (AUTO VIGOR ON confirmed)!")
                                     print(f"All future level-ups will now be selected automatically by the game.")
                                 else:
-                                    print(f"[AUTO VIGOR] Retrying click on AUTO VIGOR button...")
+                                    print(f"[AUTO VIGOR] Retrying click on AUTO VIGOR button to turn ON...")
                                     execute_click(av_res.norm_point[0], av_res.norm_point[1])
                                     time.sleep(0.35)
                                     check_frame2 = active_cap.grab_bgr()
@@ -467,11 +492,10 @@ def monitor_loop() -> None:
                                         auto_vigor_active = True
                                         print(f"[AUTO VIGOR ENABLED] Auto Vigor successfully turned on on retry!")
                                         print(f"All future level-ups will now be selected automatically by the game.")
-                                    else:
-                                        print(f"[AUTO VIGOR] Click sent, will verify activation on next cycle...")
-
                                 set_pause(False)
                                 print(f"==================================================\n")
+                            elif av_res.is_active:
+                                auto_vigor_active = True
 
                 # 3. Third priority: Rift Detection & Navigation (Top Gameplay Priority)
                 if RIFT_ENABLED:

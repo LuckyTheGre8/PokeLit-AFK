@@ -32,8 +32,10 @@ IMG_ASH_1006 = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463
 IMG_ASH_1028 = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794298995970_2b85bc5d.png")
 IMG_ASH_1047 = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794298973908_eeeed6e7.png")
 IMG_ASH_1023 = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794303470926_b7011c0d.png")
+IMG_EARLY_119 = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794305687196_acbd29ac.png")
 
 IMG_RUN_OVER = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794254312052_604a3c29.jpg")
+IMG_RUN_OVER_TALL = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794305258597_e5a7ab40.png")
 IMG_CHOOSE_REGION = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794254326963_916ca9c5.jpg")
 IMG_MAIN_MENU = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794254326996_f5d1b329.jpg")
 
@@ -138,8 +140,10 @@ def test_full_detection_suite():
     t_ash1028 = timer_det.detect(cv2.imread(str(IMG_ASH_1028)))
     t_ash1047 = timer_det.detect(cv2.imread(str(IMG_ASH_1047)))
     t_ash1023 = timer_det.detect(cv2.imread(str(IMG_ASH_1023)))
-    print(f"[TEST 9] Timer: 0:42={t_game.is_at_least_10_min} | 11:34={t_11m.is_at_least_10_min} | 24:01={t_24m.is_at_least_10_min} | Ash 10:06={t_ash1006.is_at_least_10_min} | Ash 10:28={t_ash1028.is_at_least_10_min} | Ash 10:47={t_ash1047.is_at_least_10_min} | Ash 10:23={t_ash1023.is_at_least_10_min}")
+    t_early119 = timer_det.detect(cv2.imread(str(IMG_EARLY_119)))
+    print(f"[TEST 9] Timer: 0:42={t_game.is_at_least_10_min} | 1:19={t_early119.is_at_least_10_min} | 11:34={t_11m.is_at_least_10_min} | 24:01={t_24m.is_at_least_10_min} | Ash 10:06={t_ash1006.is_at_least_10_min} | Ash 10:28={t_ash1028.is_at_least_10_min} | Ash 10:47={t_ash1047.is_at_least_10_min} | Ash 10:23={t_ash1023.is_at_least_10_min}")
     assert not t_game.is_at_least_10_min, "0:42 should NOT be >= 10 min!"
+    assert not t_early119.is_at_least_10_min, "1:19 should NOT be >= 10 min!"
     assert t_11m.is_at_least_10_min, "11:34 should be >= 10 min!"
     assert t_24m.is_at_least_10_min, "24:01 should be >= 10 min!"
     assert t_ash1006.is_at_least_10_min, "Ash 10:06 should be >= 10 min!"
@@ -147,7 +151,7 @@ def test_full_detection_suite():
     assert t_ash1047.is_at_least_10_min, "Ash 10:47 should be >= 10 min!"
     assert t_ash1023.is_at_least_10_min, "Ash 10:23 should be >= 10 min!"
 
-    # 10. Auto Vigor Button Detection, Horizontal Tracking & Active State
+    # 10. Auto Vigor Button Detection, Dual-State Enforcement (<10m OFF vs >=10m ON)
     av_det = AutoVigorDetector()
     av_early = av_det.detect(im_game)
     av_late = av_det.detect(cv2.imread(str(IMG_AUTO_VIGOR)))
@@ -155,21 +159,28 @@ def test_full_detection_suite():
     av_ash_on1 = av_det.detect(cv2.imread(str(IMG_ASH_1028)))
     av_ash_on2 = av_det.detect(cv2.imread(str(IMG_ASH_1047)))
     av_ash_1023 = av_det.detect(cv2.imread(str(IMG_ASH_1023)))
-    print(f"[TEST 10] Auto Vigor: early pt={av_early.norm_point} (active={av_early.is_active}) | late pt={av_late.norm_point} (active={av_late.is_active}) | ash_off pt={av_ash_off.norm_point} (active={av_ash_off.is_active}) | ash_1023 pt={av_ash_1023.norm_point} (active={av_ash_1023.is_active}) | ash_on pt={av_ash_on1.norm_point} (active={av_ash_on1.is_active})")
+    av_early_119 = av_det.detect(cv2.imread(str(IMG_EARLY_119)))
+    print(f"[TEST 10] Auto Vigor: early pt={av_early.norm_point} (active={av_early.is_active}) | early_119 pt={av_early_119.norm_point} (active={av_early_119.is_active}) | late pt={av_late.norm_point} (active={av_late.is_active}) | ash_off pt={av_ash_off.norm_point} (active={av_ash_off.is_active}) | ash_1023 pt={av_ash_1023.norm_point} (active={av_ash_1023.is_active}) | ash_on pt={av_ash_on1.norm_point} (active={av_ash_on1.is_active})")
     assert av_early.is_present and av_early.norm_point is not None and not av_early.is_active
+    # Early 1:19 is currently active (pink), which informs perk_selector to turn it OFF so early level-ups are selected by bot
+    assert av_early_119.is_present and av_early_119.is_active and av_early_119.norm_point == (202, 152)
     assert av_late.is_present and av_late.norm_point is not None and not av_late.is_active
     assert av_ash_off.is_present and av_ash_off.norm_point == (238, 152) and not av_ash_off.is_active
     assert av_ash_1023.is_present and av_ash_1023.norm_point == (238, 152) and not av_ash_1023.is_active
     assert av_ash_on1.is_present and av_ash_on1.norm_point == (202, 152) and av_ash_on1.is_active
     assert av_ash_on2.is_present and av_ash_on2.norm_point == (291, 152) and av_ash_on2.is_active
 
-    # 11. End-of-Match: "Run over" Screen -> Click "Back to menu"
+    # 11. End-of-Match: "Run over" Screen -> Click "Back to menu" (Short vs Tall loot modals)
     menu_det = MenuNavigatorDetector()
     im_ro = cv2.imread(str(IMG_RUN_OVER))
     m_ro = menu_det.detect(im_ro)
-    print(f"[TEST 11] Run Over: type={m_ro.screen_type.value}, click={m_ro.click_point}, conf={m_ro.confidence}")
+    im_ro_tall = cv2.imread(str(IMG_RUN_OVER_TALL))
+    m_ro_tall = menu_det.detect(im_ro_tall)
+    print(f"[TEST 11] Run Over: short type={m_ro.screen_type.value}, click={m_ro.click_point}, conf={m_ro.confidence} | tall type={m_ro_tall.screen_type.value}, click={m_ro_tall.click_point}, conf={m_ro_tall.confidence}")
     assert m_ro.screen_type == MenuScreenType.RUN_OVER, f"Expected RUN_OVER, got {m_ro.screen_type}"
     assert m_ro.click_point is not None and abs(m_ro.click_point[0] - 460) <= 10 and abs(m_ro.click_point[1] - 483) <= 10
+    assert m_ro_tall.screen_type == MenuScreenType.RUN_OVER, f"Expected RUN_OVER for tall modal, got {m_ro_tall.screen_type}"
+    assert m_ro_tall.click_point is not None and abs(m_ro_tall.click_point[0] - 460) <= 10 and abs(m_ro_tall.click_point[1] - 590) <= 10
 
     # 12. Main Menu: "Play" Button -> Click "Play"
     im_mm = cv2.imread(str(IMG_MAIN_MENU))

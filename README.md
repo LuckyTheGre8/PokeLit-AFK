@@ -30,15 +30,17 @@ A complete bot system for **PokéLit** that targets **ONLY** the specific game w
 - **Item Window (Pickup)**: 2 options -> Always taps **`2`** (`Equip [Item]`).
 - **Item Window (Change / Swap / Lock)**: 3 options -> Always taps **`3`** (`Lock [Item]`).
 - **Seamless Rift Path Preservation**: If a level-up or item modal appears while moving towards the rift, movement is paused without losing the rift heading. The choice is selected, rift position is re-verified, and navigation resumes directly towards the rift without ever dropping into random movement!
-- **Auto Vigor at 10 Minutes**:
-  - For the first 10 minutes of match time (or until `10:00` on the in-game timer), the bot selects your level-up perks.
-  - At 10 minutes, the bot automatically locates and clicks the **AUTO VIGOR** button below the stats card.
+- **Auto Vigor at 10 Minutes (Dual-State Synchronization)**:
+  - **Early Game (< 10:00 on timer)**: The bot enforces that Auto Vigor is **OFF**. If Auto Vigor was left on from a previous match, the bot automatically clicks it to turn it OFF so your chosen level-up perks (1, 2, or 3) are selected normally.
+  - **Late Game (>= 10:00 on timer)**: The bot automatically clicks **AUTO VIGOR** to turn it **ON** (pink pill `AUTO VIGOR ON`).
+  - **In-Game Timer Primacy**: Uses the live in-game match timer as the ground truth, preventing wall-clock session time from triggering late-game behavior prematurely.
   - From 10:00 onwards, the game applies all subsequent level-ups automatically in the background, keeping movement towards rifts completely uninterrupted!
 
 ### 3. Automatic Match Restart Loop (Infinite AFK)
-- **"Run over" Screen**: When a match concludes, the bot detects the summary card and clicks **`Back to menu`**.
+- **"Run over" Screen**: When a match concludes, the bot automatically detects the summary card across both short and tall loot layouts (with IV gems, Gacha tickets, and Moves) and dynamically locates the exact center of **`Back to menu`** ($y \approx 483$ on short runs, $y \approx 590$ on tall runs).
 - **Main Menu**: Detects the main lobby with Mewtwo and clicks **`Play`** (`Enter the dungeon`).
 - **Region Selection**: Detects the region modal and selects **`Kanto`**.
+- **High-DPI Calibration**: Physical coordinates are scaled cleanly with per-monitor DPI awareness and an 80ms mouse-down hold duration for HTML5 canvas games.
 - **Seamless Match Initialization**: Resets timers and Auto Vigor, resumes WASD movement, and plays the new game automatically.
 
 ### 4. Background Window Isolation

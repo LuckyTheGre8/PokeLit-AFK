@@ -606,46 +606,54 @@ class MenuNavigatorDetector:
         norm = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
 
         # 1. "Run over" screen (Match ended -> Click "Back to menu")
+        # Accommodates both short match cards (y~145) and tall match cards with IV/Gacha loot (y~37)
+        val_ro, val_bm = 0.0, 0.0
+        click_pt = (460, 483)
+
         if self.tpl_run_over is not None:
-            roi_ro = norm[130:180, 440:580]
+            roi_ro = norm[20:250, 420:600]
             if roi_ro.shape[0] >= self.tpl_run_over.shape[0] and roi_ro.shape[1] >= self.tpl_run_over.shape[1]:
                 res_ro = cv2.matchTemplate(roi_ro, self.tpl_run_over, cv2.TM_CCOEFF_NORMED)
                 val_ro = float(cv2.minMaxLoc(res_ro)[1])
-                if val_ro >= 0.75:
-                    click_pt = (460, 483)  # Center of "Back to menu" button
-                    if self.tpl_btn_menu is not None:
-                        roi_bm = norm[450:510, 380:530]
-                        if roi_bm.shape[0] >= self.tpl_btn_menu.shape[0] and roi_bm.shape[1] >= self.tpl_btn_menu.shape[1]:
-                            res_bm = cv2.matchTemplate(roi_bm, self.tpl_btn_menu, cv2.TM_CCOEFF_NORMED)
-                            loc_bm = cv2.minMaxLoc(res_bm)[3]
-                            click_pt = (380 + loc_bm[0] + self.tpl_btn_menu.shape[1] // 2, 450 + loc_bm[1] + self.tpl_btn_menu.shape[0] // 2)
-                    return MenuDetectionResult(screen_type=MenuScreenType.RUN_OVER, click_point=click_pt, confidence=round(val_ro, 4))
+
+        if self.tpl_btn_menu is not None:
+            roi_bm = norm[400:635, 360:540]
+            if roi_bm.shape[0] >= self.tpl_btn_menu.shape[0] and roi_bm.shape[1] >= self.tpl_btn_menu.shape[1]:
+                res_bm = cv2.matchTemplate(roi_bm, self.tpl_btn_menu, cv2.TM_CCOEFF_NORMED)
+                min_bm, max_bm, _, loc_bm = cv2.minMaxLoc(res_bm)
+                val_bm = float(max_bm)
+                if val_bm >= 0.70:
+                    click_pt = (360 + loc_bm[0] + self.tpl_btn_menu.shape[1] // 2, 400 + loc_bm[1] + self.tpl_btn_menu.shape[0] // 2)
+
+        if val_ro >= 0.70 or val_bm >= 0.70:
+            conf = max(val_ro, val_bm)
+            return MenuDetectionResult(screen_type=MenuScreenType.RUN_OVER, click_point=click_pt, confidence=round(conf, 4))
 
         # 2. "Choose the region" modal -> Click "Kanto"
         if self.tpl_region is not None:
-            roi_reg = norm[140:190, 200:420]
+            roi_reg = norm[120:220, 180:440]
             if roi_reg.shape[0] >= self.tpl_region.shape[0] and roi_reg.shape[1] >= self.tpl_region.shape[1]:
                 res_reg = cv2.matchTemplate(roi_reg, self.tpl_region, cv2.TM_CCOEFF_NORMED)
                 val_reg = float(cv2.minMaxLoc(res_reg)[1])
-                if val_reg >= 0.75:
+                if val_reg >= 0.70:
                     click_pt = (266, 277)  # Center of Kanto card
                     if self.tpl_kanto is not None:
-                        roi_kt = norm[200:350, 200:320]
+                        roi_kt = norm[180:360, 180:340]
                         if roi_kt.shape[0] >= self.tpl_kanto.shape[0] and roi_kt.shape[1] >= self.tpl_kanto.shape[1]:
                             res_kt = cv2.matchTemplate(roi_kt, self.tpl_kanto, cv2.TM_CCOEFF_NORMED)
                             loc_kt = cv2.minMaxLoc(res_kt)[3]
-                            click_pt = (200 + loc_kt[0] + 20, 200 + loc_kt[1] - 5)
+                            click_pt = (180 + loc_kt[0] + 20, 180 + loc_kt[1] - 5)
                     return MenuDetectionResult(screen_type=MenuScreenType.CHOOSE_REGION, click_point=click_pt, confidence=round(val_reg, 4))
 
         # 3. Main Menu (Play button -> Click "Play")
         if self.tpl_play is not None:
-            roi_pl = norm[440:520, 380:640]
+            roi_pl = norm[400:560, 360:660]
             if roi_pl.shape[0] >= self.tpl_play.shape[0] and roi_pl.shape[1] >= self.tpl_play.shape[1]:
                 res_pl = cv2.matchTemplate(roi_pl, self.tpl_play, cv2.TM_CCOEFF_NORMED)
                 val_pl = float(cv2.minMaxLoc(res_pl)[1])
-                if val_pl >= 0.75:
+                if val_pl >= 0.70:
                     loc_pl = cv2.minMaxLoc(res_pl)[3]
-                    click_pt = (380 + loc_pl[0] + self.tpl_play.shape[1] // 2, 440 + loc_pl[1] + self.tpl_play.shape[0] // 2)
+                    click_pt = (360 + loc_pl[0] + self.tpl_play.shape[1] // 2, 400 + loc_pl[1] + self.tpl_play.shape[0] // 2)
                     return MenuDetectionResult(screen_type=MenuScreenType.MAIN_MENU, click_point=click_pt, confidence=round(val_pl, 4))
 
         return MenuDetectionResult(screen_type=MenuScreenType.NONE, confidence=0.0)
