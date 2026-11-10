@@ -39,7 +39,7 @@ A complete bot system for **PokéLit** that targets **ONLY** the specific game w
 ### 3. Automatic Match Restart Loop (Infinite AFK)
 - **"Run over" Screen**: When a match concludes, the bot automatically detects the summary card across both short and tall loot layouts (with IV gems, Gacha tickets, and Moves) and dynamically locates the exact center of **`Back to menu`** ($y \approx 483$ on short runs, $y \approx 590$ on tall runs).
 - **Main Menu**: Detects the main lobby with Mewtwo and clicks **`Play`** (`Enter the dungeon`).
-- **Region Selection**: Detects the region modal and selects **`Kanto`**.
+- **Region Selection**: Detects the region modal and selects **`Johto`** (or configurable via `config.json`).
 - **High-DPI Calibration**: Physical coordinates are scaled cleanly with per-monitor DPI awareness and an 80ms mouse-down hold duration for HTML5 canvas games.
 - **Seamless Match Initialization**: Resets timers and Auto Vigor, resumes WASD movement, and plays the new game automatically.
 

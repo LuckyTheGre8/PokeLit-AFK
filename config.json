@@ -37,7 +37,7 @@
   },
   "auto_restart": {
     "enabled": true,
-    "region": "kanto",
+    "region": "johto",
     "post_click_delay_seconds": 1.2
   },
   "spatial_ai": {

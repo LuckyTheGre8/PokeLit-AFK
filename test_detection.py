@@ -197,14 +197,20 @@ def test_full_detection_suite():
     assert m_mm.screen_type == MenuScreenType.MAIN_MENU, f"Expected MAIN_MENU, got {m_mm.screen_type}"
     assert m_mm.click_point is not None and abs(m_mm.click_point[0] - 512) <= 10 and abs(m_mm.click_point[1] - 479) <= 10
 
-    # 13. Choose Region: "Choose the region" -> Select "Kanto"
+    # 13. Choose Region: "Choose the region" -> Select Johto (default) or Kanto
     im_cr = cv2.imread(str(IMG_CHOOSE_REGION))
-    m_cr = menu_det.detect(im_cr)
-    print(f"[TEST 13] Choose Region: type={m_cr.screen_type.value}, click={m_cr.click_point}, conf={m_cr.confidence}")
-    assert m_cr.screen_type == MenuScreenType.CHOOSE_REGION, f"Expected CHOOSE_REGION, got {m_cr.screen_type}"
-    # Verify click falls on Kanto card (bbox: 214..319, 204..351)
-    assert m_cr.click_point is not None
-    assert 214 <= m_cr.click_point[0] <= 319 and 204 <= m_cr.click_point[1] <= 351, f"Click {m_cr.click_point} outside Kanto card!"
+    menu_det_johto = MenuNavigatorDetector(target_region="johto")
+    m_cr_johto = menu_det_johto.detect(im_cr)
+    menu_det_kanto = MenuNavigatorDetector(target_region="kanto")
+    m_cr_kanto = menu_det_kanto.detect(im_cr)
+    print(f"[TEST 13] Choose Region: Johto click={m_cr_johto.click_point} | Kanto click={m_cr_kanto.click_point}")
+    assert m_cr_johto.screen_type == MenuScreenType.CHOOSE_REGION, f"Expected CHOOSE_REGION, got {m_cr_johto.screen_type}"
+    # Verify Johto click falls on Johto card (bbox: 334..440, 204..351)
+    assert m_cr_johto.click_point is not None
+    assert 334 <= m_cr_johto.click_point[0] <= 440 and 204 <= m_cr_johto.click_point[1] <= 351, f"Click {m_cr_johto.click_point} outside Johto card!"
+    # Verify Kanto click falls on Kanto card (bbox: 214..319, 204..351)
+    assert m_cr_kanto.click_point is not None
+    assert 214 <= m_cr_kanto.click_point[0] <= 319 and 204 <= m_cr_kanto.click_point[1] <= 351, f"Click {m_cr_kanto.click_point} outside Kanto card!"
 
     # 14. Menu False-Positive Check: Normal gameplay must NOT trigger menu actions
     m_game = menu_det.detect(im_game)

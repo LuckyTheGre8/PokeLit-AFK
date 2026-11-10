@@ -103,7 +103,7 @@ def load_config() -> dict:
         },
         "auto_restart": {
             "enabled": True,
-            "region": "kanto",
+            "region": "johto",
             "post_click_delay_seconds": 1.2,
         },
     }
@@ -148,7 +148,9 @@ AV_USE_GAME_TIMER = AV_CFG.get("use_game_timer", True)
 
 AR_CFG = CONFIG.get("auto_restart", {})
 AR_ENABLED = AR_CFG.get("enabled", True)
-AR_REGION = AR_CFG.get("region", "kanto")
+AR_REGION = str(AR_CFG.get("region", "johto")).lower()
+if AR_REGION == "jhoto":
+    AR_REGION = "johto"
 AR_DELAY = float(AR_CFG.get("post_click_delay_seconds", 1.2))
 
 running = threading.Event()
@@ -160,7 +162,7 @@ detector = LevelUpDetector(confidence_threshold=CONF_THRESH)
 rift_detector = RiftDetector()
 timer_detector = GameTimerDetector()
 auto_vigor_detector = AutoVigorDetector()
-menu_detector = MenuNavigatorDetector()
+menu_detector = MenuNavigatorDetector(target_region=AR_REGION)
 spatial_nav = SpatialNavigator()
 
 match_start_time: float = time.monotonic()
@@ -304,7 +306,7 @@ def monitor_loop() -> None:
     print(f"Item Strategy:     2-Options -> [{selector.item_choice_2}] | 3-Options -> [{selector.item_choice_3}]")
     print(f"Rift Navigation:   {'ENABLED (Auto-steers to purple arrow/tear)' if RIFT_ENABLED else 'DISABLED'}")
     print(f"Auto Vigor:        {'ENABLED (Activates at 10:00 on timer)' if AV_ENABLED else 'DISABLED'}")
-    print(f"Auto Restart:      {'ENABLED (Back to menu -> Play -> Kanto)' if AR_ENABLED else 'DISABLED'}")
+    print(f"Auto Restart:      {'ENABLED (Back to menu -> Play -> ' + AR_REGION.capitalize() + ')' if AR_ENABLED else 'DISABLED'}")
     print("Press [F9] to stop | [F7] for test scan.\n")
 
     modals_handled = 0

@@ -628,16 +628,20 @@ class AutoVigorDetector:
 class MenuNavigatorDetector:
     """Detects end-of-match Run Over screen, Main Menu Play button, and Choose Region modal."""
 
-    def __init__(self, templates_dir: Path | str | None = None) -> None:
+    def __init__(self, templates_dir: Path | str | None = None, target_region: str = "johto") -> None:
         if templates_dir is None:
             templates_dir = Path(__file__).resolve().parent / "templates"
         self.templates_dir = Path(templates_dir)
+        self.target_region = target_region.lower()
+        if self.target_region == "jhoto":
+            self.target_region = "johto"
 
         self.tpl_run_over = self._load_template("run_over_title.png")
         self.tpl_btn_menu = self._load_template("back_to_menu_btn.png")
         self.tpl_play = self._load_template("main_menu_play_btn.png")
         self.tpl_region = self._load_template("choose_region_title.png")
         self.tpl_kanto = self._load_template("kanto_word.png")
+        self.tpl_johto = self._load_template("johto_word.png")
 
     def _load_template(self, filename: str) -> np.ndarray | None:
         path = self.templates_dir / filename
@@ -678,20 +682,30 @@ class MenuNavigatorDetector:
             conf = max(val_ro, val_bm)
             return MenuDetectionResult(screen_type=MenuScreenType.RUN_OVER, click_point=click_pt, confidence=round(conf, 4))
 
-        # 2. "Choose the region" modal -> Click "Kanto"
+        # 2. "Choose the region" modal -> Click target region card (e.g. Johto or Kanto)
         if self.tpl_region is not None:
             roi_reg = norm[120:220, 180:440]
             if roi_reg.shape[0] >= self.tpl_region.shape[0] and roi_reg.shape[1] >= self.tpl_region.shape[1]:
                 res_reg = cv2.matchTemplate(roi_reg, self.tpl_region, cv2.TM_CCOEFF_NORMED)
                 val_reg = float(cv2.minMaxLoc(res_reg)[1])
                 if val_reg >= 0.70:
-                    click_pt = (266, 277)  # Center of Kanto card
-                    if self.tpl_kanto is not None:
-                        roi_kt = norm[180:360, 180:340]
-                        if roi_kt.shape[0] >= self.tpl_kanto.shape[0] and roi_kt.shape[1] >= self.tpl_kanto.shape[1]:
-                            res_kt = cv2.matchTemplate(roi_kt, self.tpl_kanto, cv2.TM_CCOEFF_NORMED)
-                            loc_kt = cv2.minMaxLoc(res_kt)[3]
-                            click_pt = (180 + loc_kt[0] + 20, 180 + loc_kt[1] - 5)
+                    region = self.target_region.lower()
+                    if region in ("johto", "jhoto"):
+                        click_pt = (387, 277)  # Center of Johto card
+                        if self.tpl_johto is not None:
+                            roi_jh = norm[180:360, 310:460]
+                            if roi_jh.shape[0] >= self.tpl_johto.shape[0] and roi_jh.shape[1] >= self.tpl_johto.shape[1]:
+                                res_jh = cv2.matchTemplate(roi_jh, self.tpl_johto, cv2.TM_CCOEFF_NORMED)
+                                loc_jh = cv2.minMaxLoc(res_jh)[3]
+                                click_pt = (310 + loc_jh[0] + self.tpl_johto.shape[1] // 2, 180 + loc_jh[1] + self.tpl_johto.shape[0] // 2)
+                    else:  # default to Kanto
+                        click_pt = (266, 277)  # Center of Kanto card
+                        if self.tpl_kanto is not None:
+                            roi_kt = norm[180:360, 180:340]
+                            if roi_kt.shape[0] >= self.tpl_kanto.shape[0] and roi_kt.shape[1] >= self.tpl_kanto.shape[1]:
+                                res_kt = cv2.matchTemplate(roi_kt, self.tpl_kanto, cv2.TM_CCOEFF_NORMED)
+                                loc_kt = cv2.minMaxLoc(res_kt)[3]
+                                click_pt = (180 + loc_kt[0] + 20, 180 + loc_kt[1] - 5)
                     return MenuDetectionResult(screen_type=MenuScreenType.CHOOSE_REGION, click_point=click_pt, confidence=round(val_reg, 4))
 
         # 3. Main Menu (Play button -> Click "Play")
