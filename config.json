@@ -31,14 +31,15 @@
     "confidence_threshold": 0.75
   },
   "auto_vigor": {
-    "enabled": true,
+    "enabled": false,
     "trigger_minutes": 10.0,
     "use_game_timer": true
   },
   "auto_restart": {
     "enabled": true,
     "region": "johto",
-    "post_click_delay_seconds": 1.2
+    "post_click_delay_seconds": 2.5,
+    "run_over_cooldown_seconds": 5.0
   },
   "spatial_ai": {
     "enabled": true,

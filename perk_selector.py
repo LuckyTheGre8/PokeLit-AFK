@@ -104,7 +104,8 @@ def load_config() -> dict:
         "auto_restart": {
             "enabled": True,
             "region": "johto",
-            "post_click_delay_seconds": 1.2,
+            "post_click_delay_seconds": 2.5,
+            "run_over_cooldown_seconds": 5.0,
         },
     }
     if CONFIG_FILE.exists():
@@ -151,7 +152,8 @@ AR_ENABLED = AR_CFG.get("enabled", True)
 AR_REGION = str(AR_CFG.get("region", "johto")).lower()
 if AR_REGION == "jhoto":
     AR_REGION = "johto"
-AR_DELAY = float(AR_CFG.get("post_click_delay_seconds", 1.2))
+AR_DELAY = float(AR_CFG.get("post_click_delay_seconds", 2.5))
+AR_RO_COOLDOWN = float(AR_CFG.get("run_over_cooldown_seconds", 5.0))
 
 running = threading.Event()
 shutdown = threading.Event()
@@ -313,6 +315,9 @@ def monitor_loop() -> None:
     rift_active_logged = False
     last_rift_seen_time = 0.0
     last_vigor_toggle_time = 0.0
+    last_run_over_click_time = 0.0
+    last_play_click_time = 0.0
+    last_submenu_back_time = 0.0
     global auto_vigor_active
     past_10m_latched = False
     early_timer_streak = 0
@@ -327,7 +332,7 @@ def monitor_loop() -> None:
             try:
                 frame = active_cap.grab_bgr()
 
-                # 0. Menu & Match End Navigation ("Run over" -> "Back to menu" -> "Play" -> "Kanto")
+                # 0. Menu & Match End Navigation ("Run over" -> "Back to menu" -> "Play" -> Region)
                 if AR_ENABLED:
                     menu_res: MenuDetectionResult = menu_detector.detect(frame)
                     if menu_res.screen_type != MenuScreenType.NONE and menu_res.click_point:
@@ -335,15 +340,40 @@ def monitor_loop() -> None:
                         set_rift_movement(False)
 
                         if menu_res.screen_type == MenuScreenType.RUN_OVER:
+                            now_ro = time.monotonic()
+                            # Generous cooldown: at least AR_RO_COOLDOWN (5.0s) between consecutive clicks
+                            if now_ro - last_run_over_click_time < AR_RO_COOLDOWN:
+                                time.sleep(0.3)
+                                continue
+                            last_run_over_click_time = now_ro
+
                             print(f"\n==================================================")
                             print(f" [RUN OVER DETECTED] Match has ended!")
                             print(f" -> Clicking 'Back to menu' button at {menu_res.click_point}...")
                             execute_click(menu_res.click_point[0], menu_res.click_point[1])
-                            time.sleep(AR_DELAY)
+
+                            # Wait patiently for 'Run over' screen to dismiss and transition to Main Menu
+                            print(f" -> Waiting for 'Run over' screen to dismiss and Main Menu to load...")
+                            start_wait = time.monotonic()
+                            while time.monotonic() - start_wait < 5.0:
+                                time.sleep(0.35)
+                                check_frame = active_cap.grab_bgr()
+                                check_menu = menu_detector.detect(check_frame)
+                                if check_menu.screen_type != MenuScreenType.RUN_OVER:
+                                    break
+
+                            # Extra delay after transition to let the Main Menu fully settle
+                            time.sleep(max(2.5, AR_DELAY))
                             print("==================================================\n")
                             continue
 
                         elif menu_res.screen_type == MenuScreenType.MAIN_MENU:
+                            now_pl = time.monotonic()
+                            if now_pl - last_play_click_time < 3.0:
+                                time.sleep(0.3)
+                                continue
+                            last_play_click_time = now_pl
+
                             print(f"\n==================================================")
                             print(f" [MAIN MENU DETECTED]")
                             print(f" -> Clicking 'Play' (Enter dungeon) at {menu_res.click_point}...")
@@ -368,6 +398,21 @@ def monitor_loop() -> None:
 
                             set_pause(False)
                             print(f" [NEW MATCH STARTED] Movement and perk selection active!")
+                            print("==================================================\n")
+                            continue
+
+                        elif menu_res.screen_type == MenuScreenType.SUBMENU_BACK:
+                            now_sb = time.monotonic()
+                            if now_sb - last_submenu_back_time < 2.5:
+                                time.sleep(0.3)
+                                continue
+                            last_submenu_back_time = now_sb
+
+                            print(f"\n==================================================")
+                            print(f" [SUB-MENU / GACHA MODAL DETECTED]")
+                            print(f" -> Clicking 'Back' button at {menu_res.click_point} to return to Main Menu...")
+                            execute_click(menu_res.click_point[0], menu_res.click_point[1])
+                            time.sleep(2.0)
                             print("==================================================\n")
                             continue
 

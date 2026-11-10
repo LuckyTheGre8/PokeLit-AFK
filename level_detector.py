@@ -60,6 +60,7 @@ class MenuScreenType(str, Enum):
     RUN_OVER = "run_over"
     MAIN_MENU = "main_menu"
     CHOOSE_REGION = "choose_region"
+    SUBMENU_BACK = "submenu_back"
 
 
 @dataclass
@@ -642,6 +643,7 @@ class MenuNavigatorDetector:
         self.tpl_region = self._load_template("choose_region_title.png")
         self.tpl_kanto = self._load_template("kanto_word.png")
         self.tpl_johto = self._load_template("johto_word.png")
+        self.tpl_modal_back = self._load_template("modal_back_btn.png")
 
     def _load_template(self, filename: str) -> np.ndarray | None:
         path = self.templates_dir / filename
@@ -718,6 +720,17 @@ class MenuNavigatorDetector:
                     loc_pl = cv2.minMaxLoc(res_pl)[3]
                     click_pt = (360 + loc_pl[0] + self.tpl_play.shape[1] // 2, 400 + loc_pl[1] + self.tpl_play.shape[0] // 2)
                     return MenuDetectionResult(screen_type=MenuScreenType.MAIN_MENU, click_point=click_pt, confidence=round(val_pl, 4))
+
+        # 4. Stray Sub-Menu / Modal Dialog (Gacha menu, Upgrades, etc.) -> Click "Back"
+        if self.tpl_modal_back is not None:
+            roi_mb = norm[140:220, 700:850]
+            if roi_mb.shape[0] >= self.tpl_modal_back.shape[0] and roi_mb.shape[1] >= self.tpl_modal_back.shape[1]:
+                res_mb = cv2.matchTemplate(roi_mb, self.tpl_modal_back, cv2.TM_CCOEFF_NORMED)
+                val_mb = float(cv2.minMaxLoc(res_mb)[1])
+                if val_mb >= 0.75:
+                    loc_mb = cv2.minMaxLoc(res_mb)[3]
+                    click_pt = (700 + loc_mb[0] + self.tpl_modal_back.shape[1] // 2, 140 + loc_mb[1] + self.tpl_modal_back.shape[0] // 2)
+                    return MenuDetectionResult(screen_type=MenuScreenType.SUBMENU_BACK, click_point=click_pt, confidence=round(val_mb, 4))
 
         return MenuDetectionResult(screen_type=MenuScreenType.NONE, confidence=0.0)
 

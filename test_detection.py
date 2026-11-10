@@ -217,6 +217,15 @@ def test_full_detection_suite():
     print(f"[TEST 14] Gameplay Menu Check: type={m_game.screen_type.value}")
     assert m_game.screen_type == MenuScreenType.NONE, "Gameplay screen should NOT trigger any menu action!"
 
+    # 14b. Sub-Menu / Gacha Modal Recovery: Detects "Back" button on modals
+    im_modal = cv2.imread(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794308087469_2f3955be.png")
+    im_gacha_mock = im_modal.copy()
+    im_gacha_mock[120:220, 180:440] = 0  # Mask region title to simulate Gacha / stray modal
+    m_gacha = menu_det.detect(im_gacha_mock)
+    print(f"[TEST 14b] Modal Recovery: type={m_gacha.screen_type.value}, click={m_gacha.click_point}")
+    assert m_gacha.screen_type == MenuScreenType.SUBMENU_BACK
+    assert m_gacha.click_point is not None and abs(m_gacha.click_point[0] - 775) <= 10 and abs(m_gacha.click_point[1] - 167) <= 10
+
     # 15. Spatial AI: Early Game Swarm Kiting Evasion
     spatial_nav = SpatialNavigator()
     s_early = spatial_nav.analyze(im_game)
