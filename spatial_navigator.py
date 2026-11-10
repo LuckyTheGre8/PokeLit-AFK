@@ -214,6 +214,10 @@ class SpatialNavigator:
         self.patrol_start_time = time.monotonic()
         self.smoothing_alpha = 0.50
         self.motion_tracker = TerrainMotionTracker()
+        self.last_known_rift_keys: list[str] = []
+        self.last_known_rift_angle: float | None = None
+        self.last_rift_seen_time: float = 0.0
+        self.rift_grace_period: float = 1.5
 
     def reset(self) -> None:
         """Reset internal momentum smoothing and patrol timing."""
@@ -222,6 +226,9 @@ class SpatialNavigator:
         self.patrol_start_time = time.monotonic()
         self.last_valid_keys = ["d"]
         self.motion_tracker.reset()
+        self.last_known_rift_keys = []
+        self.last_known_rift_angle = None
+        self.last_rift_seen_time = 0.0
 
     def find_portal(self, norm: np.ndarray) -> tuple[bool, list[str], float, tuple[int, int] | None]:
         """Detect physical rift portal directly on normalized frame."""
@@ -287,23 +294,37 @@ class SpatialNavigator:
         # 0. Autonomous Live Rift Detection (Portal Tear, Dynamic Compass Arrow, Banner)
         # ---------------------------------------------------------
         # Always evaluate the fresh camera frame directly on every tick for real-time tracking!
+        now = time.monotonic()
         live_rift = self.rift_detector.detect(norm)
         if live_rift.is_active and live_rift.direction_keys:
             active_rift_keys = live_rift.direction_keys
             active_rift_angle = live_rift.angle_deg
             active_rift_mode = live_rift.mode
             active_rift_pt = live_rift.target_point
+            self.last_known_rift_keys = list(active_rift_keys)
+            self.last_known_rift_angle = active_rift_angle
+            self.last_rift_seen_time = now
         elif rift_direction_keys:
             # Fallback to external IPC signal only if live vision was momentarily obscured
             active_rift_keys = rift_direction_keys
             active_rift_angle = None
             active_rift_mode = "ipc_fallback"
             active_rift_pt = None
+            self.last_known_rift_keys = list(active_rift_keys)
+            self.last_known_rift_angle = None
+            self.last_rift_seen_time = now
+        elif self.last_known_rift_keys and (now - self.last_rift_seen_time < self.rift_grace_period):
+            # Heading Persistence Memory: retain rift direction for up to 1.5s during modal transitions or brief frame occlusions
+            active_rift_keys = self.last_known_rift_keys
+            active_rift_angle = self.last_known_rift_angle
+            active_rift_mode = "rift_push"
+            active_rift_pt = None
         else:
             active_rift_keys = None
             active_rift_angle = None
             active_rift_mode = None
             active_rift_pt = None
+            self.last_known_rift_keys = []
 
         # ---------------------------------------------------------
         # 1. Threat Detection & Sector Density in Danger Zone

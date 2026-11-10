@@ -314,6 +314,8 @@ def monitor_loop() -> None:
     modals_handled = 0
     rift_active_logged = False
     last_rift_seen_time = 0.0
+    last_active_rift_keys: list[str] = []
+    last_active_rift_angle: float | None = None
     last_vigor_toggle_time = 0.0
     last_run_over_click_time = 0.0
     last_play_click_time = 0.0
@@ -420,6 +422,9 @@ def monitor_loop() -> None:
                 result: DetectionResult = detector.detect(frame)
 
                 if result.is_level_up:
+                    # Check if we were actively navigating a rift right before modal appeared
+                    was_following_rift = (time.monotonic() - last_rift_seen_time < 2.5) and bool(last_active_rift_keys)
+
                     # Do NOT clear rift navigation file; only pause movement so rift heading is retained!
                     set_pause(True)
 
@@ -464,8 +469,16 @@ def monitor_loop() -> None:
                         fresh_frame = active_cap.grab_bgr()
                         fresh_rift = rift_detector.detect(fresh_frame)
                         if fresh_rift.is_active and fresh_rift.direction_keys:
+                            last_active_rift_keys = list(fresh_rift.direction_keys)
+                            last_active_rift_angle = fresh_rift.angle_deg
+                            last_rift_seen_time = time.monotonic()
                             set_rift_movement(True, fresh_rift.direction_keys, fresh_rift.angle_deg)
-                            print(f" -> Rift path preserved: Steering {fresh_rift.direction_keys} (Angle: {fresh_rift.angle_deg}°)")
+                            print(f" -> Rift path re-acquired immediately: Steering {fresh_rift.direction_keys} (Angle: {fresh_rift.angle_deg}°)")
+                        elif was_following_rift and last_active_rift_keys:
+                            # CRITICAL FIX: Retain rift heading through level-up dismissal so character does not wander off
+                            last_rift_seen_time = time.monotonic()
+                            set_rift_movement(True, last_active_rift_keys, last_active_rift_angle)
+                            print(f" -> Rift path preserved through modal: Continuing {last_active_rift_keys} (Angle: {last_active_rift_angle}°)")
                         else:
                             set_rift_movement(False)
 
@@ -563,17 +576,23 @@ def monitor_loop() -> None:
                     rift_res: RiftResult = rift_detector.detect(frame)
                     if rift_res.is_active and rift_res.direction_keys:
                         last_rift_seen_time = time.monotonic()
+                        last_active_rift_keys = list(rift_res.direction_keys)
+                        last_active_rift_angle = rift_res.angle_deg
                         if not rift_active_logged:
                             rift_active_logged = True
                             desc = "Physical Portal Tear" if rift_res.mode == "portal_tear" else ("Arrow indicator" if rift_res.mode == "rift_arrow" else "Banner")
                             print(f"[RIFT DETECTED - TOP PRIORITY] {desc} found at {rift_res.target_point} -> Steering {rift_res.direction_keys} (Angle: {rift_res.angle_deg}°)")
                         set_rift_movement(True, rift_res.direction_keys, rift_res.angle_deg)
                     else:
-                        if time.monotonic() - last_rift_seen_time > 0.4:
+                        # 1.5s Heading Persistence Memory grace window: ensures spell particle bursts, screen flashes,
+                        # and brief monster occlusions do not abruptly cancel rift push
+                        if time.monotonic() - last_rift_seen_time > 1.5:
                             if rift_active_logged:
                                 rift_active_logged = False
                                 print("[RIFT ENDED] Portal / Arrow cleared. Returning to normal movement.")
                             set_rift_movement(False)
+                            last_active_rift_keys = []
+                            last_active_rift_angle = None
 
             except Exception as exc:
                 print(f"[WARN] Detection error: {exc}")

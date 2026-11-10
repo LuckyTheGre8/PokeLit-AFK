@@ -28,7 +28,7 @@
   },
   "rift_navigation": {
     "enabled": true,
-    "confidence_threshold": 0.75
+    "confidence_threshold": 0.65
   },
   "auto_vigor": {
     "enabled": false,

@@ -269,6 +269,7 @@ class RiftDetector:
         self.tpl_banner = self._load_template("rift_banner_text.png")
         self.tpl_rift_text = self._load_template("rift_text_clean.png")
         self.tpl_portal = self._load_template("portal_core.png")
+        self.tpl_arrow_above = self._load_template("arrow_above_portal.png")
 
     def _load_template(self, filename: str) -> np.ndarray | None:
         path = self.templates_dir / filename
@@ -322,10 +323,10 @@ class RiftDetector:
 
         for i in range(1, num_labels):
             px, py, pw, ph, area = stats[i]
-            # Physical portals are tall vertical tears (ph >= 85, pw >= 45, area >= 3000)
-            if area >= 3000 and pw >= 45 and ph >= 85:
+            # Adaptive physical portal tear: detect tall vertical tears early as they enter screen (ph >= 45, pw >= 30, area >= 1200)
+            if area >= 1200 and pw >= 30 and ph >= 45:
                 ar = ph / float(pw)
-                if 1.25 <= ar <= 2.8:
+                if 1.15 <= ar <= 3.2:
                     pad = 12
                     sub = norm[max(0, py - pad) : min(target_h, py + ph + pad), max(0, px - pad) : min(target_w, px + pw + pad)]
                     dark_px = int((np.max(sub, axis=2) < 45).sum())
@@ -336,7 +337,7 @@ class RiftDetector:
                     dark_in_center = (np.max(center_box, axis=2) < 45).sum()
                     center_ratio = dark_in_center / float(max(1, (cw2 - cw1) * (ch2 - ch1)))
                     # True void core requires contiguous dark pixels in center of tear (rejects solid purple mobs)
-                    if dark_px >= 500 and center_ratio >= 0.20:
+                    if dark_px >= 250 and center_ratio >= 0.15:
                         score = area + dark_px * 2.0
                         if score > best_portal_score:
                             best_portal_score = score
@@ -357,8 +358,30 @@ class RiftDetector:
                 scores=scores,
             )
 
-        # 1b. Fallback: Template Match on portal core (if available)
+        # 1b. Floating Beacon Arrow above physical portal (pointing down into portal)
         play = norm[60:625, :]
+        max_va = 0.0
+        if self.tpl_arrow_above is not None and play.shape[0] >= self.tpl_arrow_above.shape[0] and play.shape[1] >= self.tpl_arrow_above.shape[1]:
+            res_a = cv2.matchTemplate(play, self.tpl_arrow_above, cv2.TM_CCOEFF_NORMED)
+            _, max_val_a, _, max_la = cv2.minMaxLoc(res_a)
+            max_va = float(max_val_a)
+            scores["arrow_above_portal"] = round(max_va, 4)
+
+            if max_va >= 0.75:
+                aw, ah = self.tpl_arrow_above.shape[1], self.tpl_arrow_above.shape[0]
+                target_pt = (max_la[0] + aw // 2, min(target_h - 10, 60 + max_la[1] + ah // 2 + 50))
+                keys, angle = self._calc_direction(target_pt, target_w, target_h)
+                return RiftResult(
+                    is_active=True,
+                    mode="portal_tear",
+                    direction_keys=keys,
+                    angle_deg=angle,
+                    target_point=target_pt,
+                    confidence=round(max_va, 4),
+                    scores=scores,
+                )
+
+        # 1c. Fallback: Template Match on portal core (if available)
         max_vp = 0.0
         if self.tpl_portal is not None and play.shape[0] >= self.tpl_portal.shape[0] and play.shape[1] >= self.tpl_portal.shape[1]:
             res_p = cv2.matchTemplate(play, self.tpl_portal, cv2.TM_CCOEFF_NORMED)

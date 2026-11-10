@@ -323,7 +323,7 @@ def movement_loop() -> None:
                 continue
 
             if rift_mode_active:
-                if time.monotonic() - last_rift_time < 0.6:
+                if time.monotonic() - last_rift_time < 1.5:
                     time.sleep(0.04)
                     continue
 
