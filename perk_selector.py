@@ -96,6 +96,9 @@ def load_config() -> dict:
             "enabled": True,
             "confidence_threshold": 0.75,
         },
+        "auto_level": {
+            "enabled": True,
+        },
         "auto_vigor": {
             "enabled": True,
             "trigger_minutes": 10.0,
@@ -142,10 +145,8 @@ ITEM_CHOICE_3 = ITEM_CFG.get("choice_3_options", "3")
 RIFT_CFG = CONFIG.get("rift_navigation", {})
 RIFT_ENABLED = RIFT_CFG.get("enabled", True)
 
-AV_CFG = CONFIG.get("auto_vigor", {})
-AV_ENABLED = AV_CFG.get("enabled", True)
-AV_TRIGGER_MIN = float(AV_CFG.get("trigger_minutes", 10.0))
-AV_USE_GAME_TIMER = AV_CFG.get("use_game_timer", True)
+AL_CFG = CONFIG.get("auto_level", CONFIG.get("auto_vigor", {}))
+AL_ENABLED = AL_CFG.get("enabled", True)
 
 AR_CFG = CONFIG.get("auto_restart", {})
 AR_ENABLED = AR_CFG.get("enabled", True)
@@ -163,11 +164,13 @@ monitor_thread: threading.Thread | None = None
 detector = LevelUpDetector(confidence_threshold=CONF_THRESH)
 rift_detector = RiftDetector()
 timer_detector = GameTimerDetector()
-auto_vigor_detector = AutoVigorDetector()
+auto_level_detector = AutoVigorDetector()
+auto_vigor_detector = auto_level_detector
 menu_detector = MenuNavigatorDetector(target_region=AR_REGION)
 spatial_nav = SpatialNavigator()
 
 match_start_time: float = time.monotonic()
+auto_level_confirmed_on: bool = False
 auto_vigor_active: bool = False
 selector = PerkSelector(
     strategy=CHOICE_STRAT,
@@ -307,7 +310,7 @@ def monitor_loop() -> None:
     print(f"Level-Up Strategy: Option [{selector.strategy.upper()}] (taps 1, 2, or 3)")
     print(f"Item Strategy:     2-Options -> [{selector.item_choice_2}] | 3-Options -> [{selector.item_choice_3}]")
     print(f"Rift Navigation:   {'ENABLED (Auto-steers to purple arrow/tear)' if RIFT_ENABLED else 'DISABLED'}")
-    print(f"Auto Vigor:        {'ENABLED (Activates at 10:00 on timer)' if AV_ENABLED else 'DISABLED'}")
+    print(f"Auto Level:        {'ENABLED (Turns ON once at start of level)' if AL_ENABLED else 'DISABLED'}")
     print(f"Auto Restart:      {'ENABLED (Back to menu -> Play -> ' + AR_REGION.capitalize() + ')' if AR_ENABLED else 'DISABLED'}")
     print("Press [F9] to stop | [F7] for test scan.\n")
 
@@ -316,13 +319,13 @@ def monitor_loop() -> None:
     last_rift_seen_time = 0.0
     last_active_rift_keys: list[str] = []
     last_active_rift_angle: float | None = None
-    last_vigor_toggle_time = 0.0
+    last_level_toggle_time = 0.0
     last_run_over_click_time = 0.0
     last_play_click_time = 0.0
     last_submenu_back_time = 0.0
-    global auto_vigor_active
-    past_10m_latched = False
-    early_timer_streak = 0
+    global auto_level_confirmed_on, auto_vigor_active
+    auto_level_confirmed_on = False
+    auto_vigor_active = False
 
     try:
         while running.is_set() and not shutdown.is_set():
@@ -392,11 +395,10 @@ def monitor_loop() -> None:
                             print(f" -> Starting new match in {AR_REGION.capitalize()} (waiting 2.5s)...")
                             time.sleep(2.5)
 
-                            # Reset match start time and Auto Vigor flag for the fresh game
+                            # Reset match start time and Auto Level flag for the fresh game
                             match_start_time = time.monotonic()
+                            auto_level_confirmed_on = False
                             auto_vigor_active = False
-                            past_10m_latched = False
-                            early_timer_streak = 0
 
                             set_pause(False)
                             print(f" [NEW MATCH STARTED] Movement and perk selection active!")
@@ -487,89 +489,53 @@ def monitor_loop() -> None:
                     print("==================================================\n")
                     continue
 
-                # 2. Check Auto Vigor state:
-                # Rule: For the first 10 minutes on the timer, Auto Vigor MUST BE OFF (so bot selects level-up perks 1/2/3).
-                #       After 10:00 on the timer, Auto Vigor MUST BE ON (so game selects level-ups automatically).
-                if AV_ENABLED:
-                    is_past_10m = past_10m_latched
-                    timer_is_valid = False
-
-                    if AV_USE_GAME_TIMER:
-                        t_res = timer_detector.detect(frame)
-                        if t_res.detected:
-                            timer_is_valid = True
-                            if t_res.is_at_least_10_min:
-                                past_10m_latched = True
-                                is_past_10m = True
-                                early_timer_streak = 0
-                            else:
-                                early_timer_streak += 1
-                                if early_timer_streak >= 15:  # ~1.8s of consistent early timer unlatches
-                                    past_10m_latched = False
-                                    is_past_10m = False
-
-                    if not is_past_10m and not timer_is_valid:
-                        elapsed_min = (time.monotonic() - match_start_time) / 60.0
-                        if elapsed_min >= AV_TRIGGER_MIN:
-                            past_10m_latched = True
-                            is_past_10m = True
-
-                    av_res = auto_vigor_detector.detect(frame)
+                # 2. Check Auto Level state (Start of Level Automation):
+                # When at the start of a level, verify if AUTO LEVEL is present.
+                # If it is dark yellow (OFF), click it ONCE and verify it transitions to bright yellow (ON)!
+                # Once confirmed bright yellow, it stays locked ON and will not be clicked again for this match.
+                if AL_ENABLED and not auto_level_confirmed_on:
+                    al_res = auto_level_detector.detect(frame)
                     now_v = time.monotonic()
-                    if av_res.is_present and (now_v - last_vigor_toggle_time >= 2.0):
-                        if not is_past_10m:
-                            # BEFORE 10 MINUTES: Auto Vigor MUST be OFF so the bot can choose perks
-                            auto_vigor_active = False
-                            if av_res.is_active:
-                                last_vigor_toggle_time = now_v
-                                print(f"\n==================================================")
-                                print(f"[AUTO VIGOR] Timer is under 10:00, but Auto Vigor is currently ON (pink)!")
-                                print(f"Turning Auto Vigor OFF so the bot selects perks according to strategy [{selector.strategy}]...")
-                                set_pause(True)
-                                time.sleep(0.08)
-                                execute_click(av_res.norm_point[0], av_res.norm_point[1])
-                                time.sleep(0.35)
-                                check_frame = active_cap.grab_bgr()
-                                check_av = auto_vigor_detector.detect(check_frame)
-                                if not check_av.is_active:
-                                    print(f"[AUTO VIGOR] Auto Vigor successfully turned OFF for early game perk selection!")
-                                else:
-                                    print(f"[AUTO VIGOR] Retrying click to turn OFF...")
-                                    execute_click(av_res.norm_point[0], av_res.norm_point[1])
-                                    time.sleep(0.35)
-                                set_pause(False)
-                                print(f"==================================================\n")
-                        else:
-                            # AT OR AFTER 10 MINUTES: Auto Vigor MUST be ON so gameplay is uninterrupted
-                            if not av_res.is_active:
-                                last_vigor_toggle_time = now_v
-                                print(f"\n==================================================")
-                                print(f"[AUTO VIGOR TRIGGERED] 10 minute mark reached! In-game timer >= 10:00.")
-                                print(f"Clicking AUTO VIGOR button at normalized {av_res.norm_point} to turn ON...")
-                                set_pause(True)
-                                time.sleep(0.08)
-                                execute_click(av_res.norm_point[0], av_res.norm_point[1])
-                                time.sleep(0.35)
-                                check_frame = active_cap.grab_bgr()
-                                check_av = auto_vigor_detector.detect(check_frame)
-                                if check_av.is_active:
-                                    auto_vigor_active = True
-                                    print(f"[AUTO VIGOR ENABLED] Auto Vigor successfully turned on (AUTO VIGOR ON confirmed)!")
-                                    print(f"All future level-ups will now be selected automatically by the game.")
-                                else:
-                                    print(f"[AUTO VIGOR] Retrying click on AUTO VIGOR button to turn ON...")
-                                    execute_click(av_res.norm_point[0], av_res.norm_point[1])
-                                    time.sleep(0.35)
-                                    check_frame2 = active_cap.grab_bgr()
-                                    check_av2 = auto_vigor_detector.detect(check_frame2)
-                                    if check_av2.is_active:
-                                        auto_vigor_active = True
-                                        print(f"[AUTO VIGOR ENABLED] Auto Vigor successfully turned on on retry!")
-                                        print(f"All future level-ups will now be selected automatically by the game.")
-                                set_pause(False)
-                                print(f"==================================================\n")
+                    if al_res.is_present and al_res.norm_point:
+                        if al_res.is_active:
+                            # Already bright yellow / active
+                            auto_level_confirmed_on = True
+                            print(f"\n==================================================")
+                            print(f" [AUTO LEVEL CONFIRMED] Button is already ACTIVE (bright yellow) at {al_res.norm_point}!")
+                            print(f" In-game auto-level preset is active for this match.")
+                            print(f"==================================================\n")
+                        elif (now_v - last_level_toggle_time >= 2.0):
+                            last_level_toggle_time = now_v
+                            theme_label = "dark yellow" if al_res.theme == "yellow" else "inactive"
+                            print(f"\n==================================================")
+                            print(f" [START OF LEVEL - AUTO LEVEL DETECTED]")
+                            print(f" -> Button confirmed at {al_res.norm_point} in {theme_label} state.")
+                            print(f" -> Clicking once to turn AUTO LEVEL ON...")
+                            set_pause(True)
+                            time.sleep(0.08)
+                            execute_click(al_res.norm_point[0], al_res.norm_point[1])
+
+                            # Settle wait for in-game click reaction
+                            time.sleep(0.35)
+                            check_frame = active_cap.grab_bgr()
+                            check_al = auto_level_detector.detect(check_frame)
+                            if check_al.is_active:
+                                auto_level_confirmed_on = True
+                                print(f" -> [CONFIRMED] Button transitioned from dark yellow to bright yellow (AUTO LEVEL ON)!")
+                                print(f" -> Auto Level is now active for this match.")
                             else:
-                                auto_vigor_active = True
+                                print(f" -> Transition check inconclusive; retrying single click...")
+                                execute_click(al_res.norm_point[0], al_res.norm_point[1])
+                                time.sleep(0.35)
+                                check_frame2 = active_cap.grab_bgr()
+                                check_al2 = auto_level_detector.detect(check_frame2)
+                                if check_al2.is_active:
+                                    auto_level_confirmed_on = True
+                                    print(f" -> [CONFIRMED ON RETRY] Button transitioned to bright yellow (AUTO LEVEL ON)!")
+                                else:
+                                    print(f" -> [WARN] Bright yellow state not confirmed yet; will check again next cycle.")
+                            set_pause(False)
+                            print(f"==================================================\n")
 
                 # 3. Third priority: Rift Detection & Navigation (Top Gameplay Priority)
                 if RIFT_ENABLED:
@@ -655,7 +621,7 @@ def manual_test_scan() -> None:
         m_res = menu_detector.detect(frame)
         s_res = spatial_nav.analyze(frame)
         print(f"Game Timer: detected = {t_res.detected}, minutes_cat = {t_res.minutes_category}, is_at_least_10_min = {t_res.is_at_least_10_min}")
-        print(f"Auto Vigor: present = {av_res.is_present}, is_active = {av_res.is_active}, norm_point = {av_res.norm_point}")
+        print(f"Auto Level: present = {av_res.is_present}, is_active = {av_res.is_active}, norm_point = {av_res.norm_point}, theme = {av_res.theme}")
         print(f"Menu Screen: {m_res.screen_type.value} (conf = {m_res.confidence}, click = {m_res.click_point})")
         print(f"Spatial AI: mode = {s_res.mode}, keys = {s_res.direction_keys}, gems = {s_res.gems_detected}, max_threat = {s_res.max_threat_percent}%")
 

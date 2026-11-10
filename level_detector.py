@@ -106,11 +106,15 @@ class GameTimerResult:
 
 @dataclass
 class AutoVigorResult:
-    """Result of Auto Vigor button detection and state evaluation."""
+    """Result of Auto Level / Auto Vigor button detection and state evaluation."""
     is_present: bool = False
-    is_active: bool = False  # True if button is in active pink state
+    is_active: bool = False  # True if button is in active state (bright yellow or active pink)
     norm_point: tuple[int, int] | None = None  # (click_x, click_y) in normalized 1024x640 frame
     confidence: float = 0.0
+    theme: str = "yellow"  # "yellow" for AUTO LEVEL, "pink" for legacy AUTO VIGOR
+
+
+AutoLevelResult = AutoVigorResult
 
 
 class ScreenGrabber:
@@ -572,19 +576,21 @@ class GameTimerDetector:
 
 
 class AutoVigorDetector:
-    """Detects the AUTO VIGOR button position and active/inactive state in 1024x640 frame."""
+    """Detects the AUTO LEVEL / AUTO VIGOR button position and active/inactive state in 1024x640 frame."""
 
     def __init__(self, templates_dir: Path | str | None = None) -> None:
         if templates_dir is None:
             templates_dir = Path(__file__).resolve().parent / "templates"
         self.templates_dir = Path(templates_dir)
+        # Legacy Auto Vigor templates (pink theme)
         self.tpl_text = cv2.imread(str(self.templates_dir / "auto_vigor_text.png"))
         self.tpl_on = cv2.imread(str(self.templates_dir / "auto_vigor_on.png"))
+        # Auto Level templates (yellow theme)
+        self.tpl_lvl_off = cv2.imread(str(self.templates_dir / "auto_level_off.png"))
+        self.tpl_lvl_on = cv2.imread(str(self.templates_dir / "auto_level_on.png"))
+        self.tpl_lvl_on_w = cv2.imread(str(self.templates_dir / "auto_level_on_word.png"))
 
     def detect(self, frame: np.ndarray) -> AutoVigorResult:
-        if self.tpl_text is None:
-            return AutoVigorResult()
-
         h, w = frame.shape[:2]
         if w == 0 or h == 0:
             return AutoVigorResult()
@@ -597,56 +603,91 @@ class AutoVigorDetector:
         roi_y1, roi_y2 = 130, 195
         roi_x1, roi_x2 = 90, 440
         roi = norm[roi_y1:roi_y2, roi_x1:roi_x2]
-        if roi.shape[0] < self.tpl_text.shape[0] or roi.shape[1] < self.tpl_text.shape[1]:
+        if roi.shape[0] < 15 or roi.shape[1] < 50:
             return AutoVigorResult()
 
-        # Match OFF template ("AUTO VIGOR" in dark grey/red)
-        res_off = cv2.matchTemplate(roi, self.tpl_text, cv2.TM_CCOEFF_NORMED)
-        _, max_off, _, loc_off = cv2.minMaxLoc(res_off)
+        # 1. Match AUTO LEVEL (yellow theme)
+        s_lvl_off, l_lvl_off = 0.0, (0, 0)
+        s_lvl_on, l_lvl_on = 0.0, (0, 0)
+        if self.tpl_lvl_off is not None and roi.shape[0] >= self.tpl_lvl_off.shape[0] and roi.shape[1] >= self.tpl_lvl_off.shape[1]:
+            res_lo = cv2.matchTemplate(roi, self.tpl_lvl_off, cv2.TM_CCOEFF_NORMED)
+            _, s_lvl_off, _, l_lvl_off = cv2.minMaxLoc(res_lo)
+        if self.tpl_lvl_on is not None and roi.shape[0] >= self.tpl_lvl_on.shape[0] and roi.shape[1] >= self.tpl_lvl_on.shape[1]:
+            res_lon = cv2.matchTemplate(roi, self.tpl_lvl_on, cv2.TM_CCOEFF_NORMED)
+            _, s_lvl_on, _, l_lvl_on = cv2.minMaxLoc(res_lon)
 
-        # Match ON template ("AUTO VIGOR ON" in white with pink border)
-        max_on = 0.0
-        loc_on = (0, 0)
+        # 2. Match legacy AUTO VIGOR (pink theme)
+        s_vig_off, l_vig_off = 0.0, (0, 0)
+        s_vig_on, l_vig_on = 0.0, (0, 0)
+        if self.tpl_text is not None and roi.shape[0] >= self.tpl_text.shape[0] and roi.shape[1] >= self.tpl_text.shape[1]:
+            res_vo = cv2.matchTemplate(roi, self.tpl_text, cv2.TM_CCOEFF_NORMED)
+            _, s_vig_off, _, l_vig_off = cv2.minMaxLoc(res_vo)
         if self.tpl_on is not None and roi.shape[0] >= self.tpl_on.shape[0] and roi.shape[1] >= self.tpl_on.shape[1]:
-            res_on = cv2.matchTemplate(roi, self.tpl_on, cv2.TM_CCOEFF_NORMED)
-            _, max_on_val, _, loc_on = cv2.minMaxLoc(res_on)
-            max_on = float(max_on_val)
+            res_von = cv2.matchTemplate(roi, self.tpl_on, cv2.TM_CCOEFF_NORMED)
+            _, s_vig_on, _, l_vig_on = cv2.minMaxLoc(res_von)
 
-        best_score = max(float(max_off), max_on)
-        if best_score < 0.60:
-            return AutoVigorResult(is_present=False, confidence=round(best_score, 4))
+        best_lvl = max(float(s_lvl_off), float(s_lvl_on))
+        best_vig = max(float(s_vig_off), float(s_vig_on))
 
-        # Determine whether button is ON or OFF:
-        # 1. Direct template score comparison
-        # 2. Pink border pixel verification around candidate point
-        if max_on > max_off and max_on >= 0.70:
-            th, tw = self.tpl_on.shape[:2]
-            click_x = roi_x1 + loc_on[0] + tw // 2
-            click_y = roi_y1 + loc_on[1] + th // 2
-            is_active = True
-        else:
-            th, tw = self.tpl_text.shape[:2]
-            click_x = roi_x1 + loc_off[0] + tw // 2
-            click_y = roi_y1 + loc_off[1] + th // 2
+        # Check Yellow Theme (AUTO LEVEL)
+        if best_lvl >= 0.70 and best_lvl >= best_vig:
+            if s_lvl_on > s_lvl_off and s_lvl_on >= 0.75:
+                th, tw = self.tpl_lvl_on.shape[:2]
+                click_x = roi_x1 + l_lvl_on[0] + tw // 2
+                click_y = roi_y1 + l_lvl_on[1] + th // 2
+                is_active = True
+            else:
+                th, tw = self.tpl_lvl_off.shape[:2]
+                click_x = roi_x1 + l_lvl_off[0] + tw // 2
+                click_y = roi_y1 + l_lvl_off[1] + th // 2
+                # Verify bright yellow glow vs dark yellow
+                pill = norm[max(0, click_y - 7) : min(target_h, click_y + 8), max(0, click_x - 30) : min(target_w, click_x + 35)]
+                bright_y = int(((pill[:, :, 2] > 170) & (pill[:, :, 1] > 170) & (pill[:, :, 0] < 120)).sum())
+                is_active = (bright_y >= 25) or (s_lvl_on >= 0.85)
 
-            # Check if pill has pink active border or "AUTO VIGOR ON" extension
-            pill_crop = norm[max(0, click_y - 6) : min(target_h, click_y + 7), max(0, click_x - 25) : min(target_w, click_x + 25)]
-            b, g, r = cv2.split(pill_crop)
-            pink_px = int(((r.astype(int) > 140) & (b.astype(int) > 110) & (g.astype(int) < 110) & (r.astype(int) > g.astype(int) + 40)).sum())
+            return AutoVigorResult(
+                is_present=True,
+                is_active=bool(is_active),
+                norm_point=(click_x, click_y),
+                confidence=round(best_lvl, 4),
+                theme="yellow",
+            )
 
-            right_crop = norm[max(0, click_y - 5) : min(target_h, click_y + 6), min(target_w, click_x + 18) : min(target_w, click_x + 36)]
-            right_pink = 0
-            if right_crop.size > 0:
-                right_pink = int(((right_crop[:, :, 2].astype(int) > 140) & (right_crop[:, :, 0].astype(int) > 110)).sum())
+        # Check Pink Theme (AUTO VIGOR)
+        if best_vig >= 0.60:
+            if s_vig_on > s_vig_off and s_vig_on >= 0.70:
+                th, tw = self.tpl_on.shape[:2]
+                click_x = roi_x1 + l_vig_on[0] + tw // 2
+                click_y = roi_y1 + l_vig_on[1] + th // 2
+                is_active = True
+            else:
+                th, tw = self.tpl_text.shape[:2]
+                click_x = roi_x1 + l_vig_off[0] + tw // 2
+                click_y = roi_y1 + l_vig_off[1] + th // 2
 
-            is_active = (pink_px > 25) or (right_pink > 10)
+                pill_crop = norm[max(0, click_y - 6) : min(target_h, click_y + 7), max(0, click_x - 25) : min(target_w, click_x + 25)]
+                b, g, r = cv2.split(pill_crop)
+                pink_px = int(((r.astype(int) > 140) & (b.astype(int) > 110) & (g.astype(int) < 110) & (r.astype(int) > g.astype(int) + 40)).sum())
 
-        return AutoVigorResult(
-            is_present=True,
-            is_active=bool(is_active),
-            norm_point=(click_x, click_y),
-            confidence=round(best_score, 4),
-        )
+                right_crop = norm[max(0, click_y - 5) : min(target_h, click_y + 6), min(target_w, click_x + 18) : min(target_w, click_x + 36)]
+                right_pink = 0
+                if right_crop.size > 0:
+                    right_pink = int(((right_crop[:, :, 2].astype(int) > 140) & (right_crop[:, :, 0].astype(int) > 110)).sum())
+
+                is_active = (pink_px > 25) or (right_pink > 10)
+
+            return AutoVigorResult(
+                is_present=True,
+                is_active=bool(is_active),
+                norm_point=(click_x, click_y),
+                confidence=round(best_vig, 4),
+                theme="pink",
+            )
+
+        return AutoVigorResult(is_present=False, confidence=round(max(best_lvl, best_vig), 4))
+
+
+AutoLevelDetector = AutoVigorDetector
 
 
 class MenuNavigatorDetector:

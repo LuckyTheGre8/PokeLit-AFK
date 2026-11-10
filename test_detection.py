@@ -3,6 +3,7 @@
 from pathlib import Path
 import cv2
 from level_detector import (
+    AutoLevelDetector,
     AutoVigorDetector,
     GameTimerDetector,
     LevelUpDetector,
@@ -33,6 +34,8 @@ IMG_ASH_1028 = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463
 IMG_ASH_1047 = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794298973908_eeeed6e7.png")
 IMG_ASH_1023 = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794303470926_b7011c0d.png")
 IMG_EARLY_119 = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794305687196_acbd29ac.png")
+IMG_AUTO_LEVEL_OFF = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794331698224_21ffe7a4.png")
+IMG_AUTO_LEVEL_ON = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794331774526_a60640e7.png")
 
 IMG_RUN_OVER = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794254312052_604a3c29.jpg")
 IMG_RUN_OVER_TALL = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794305258597_e5a7ab40.png")
@@ -360,8 +363,29 @@ def test_full_detection_suite():
     assert portal_res.is_active and portal_res.mode == "portal_tear"
     print(f"[TEST 24] Physical Portal & Beacon: active={portal_res.is_active}, mode={portal_res.mode}, pt={portal_res.target_point}")
 
+    # 25. Auto Level Start-of-Level Activation & State Transition (Dark Yellow -> Bright Yellow):
+    # Verifies detection of AUTO LEVEL at 0:02 (dark yellow) and confirmation at 0:06 (bright yellow ON)
+    al_det = AutoLevelDetector()
+    im_al_off = cv2.imread(str(IMG_AUTO_LEVEL_OFF))
+    im_al_on = cv2.imread(str(IMG_AUTO_LEVEL_ON))
+
+    # Step 1: Start of level - verify button presence in dark yellow (OFF) state
+    res_al_off = al_det.detect(im_al_off)
+    print(f"[TEST 25 Step 1] Start of Level (0:02): present={res_al_off.is_present}, is_active={res_al_off.is_active}, pt={res_al_off.norm_point}, theme={res_al_off.theme}")
+    assert res_al_off.is_present, "AUTO LEVEL button must be detected at start of level!"
+    assert not res_al_off.is_active, "Button must be in dark yellow (OFF) state initially!"
+    assert res_al_off.theme == "yellow", "Theme must be identified as 'yellow'!"
+    assert abs(res_al_off.norm_point[0] - 165) <= 5 and abs(res_al_off.norm_point[1] - 152) <= 3
+
+    # Step 2: Post-click confirmation - verify transition to bright yellow (ON) state
+    res_al_on = al_det.detect(im_al_on)
+    print(f"[TEST 25 Step 2] Post-Click Verified (0:06): present={res_al_on.is_present}, is_active={res_al_on.is_active}, pt={res_al_on.norm_point}, theme={res_al_on.theme}")
+    assert res_al_on.is_present, "AUTO LEVEL button must be present after click!"
+    assert res_al_on.is_active, "Button must transition to bright yellow (ON) state after click!"
+    assert res_al_on.theme == "yellow", "Theme must remain 'yellow'!"
+
     print("\n================================================================================")
-    print("ALL 27 VERIFICATION TESTS (GAMEPLAY, MODALS, RIFTS, DYNAMIC ARROW, MEMORY, UNSTUCK, TIMER, VIGOR, RESTART, SPATIAL AI) PASSED!")
+    print("ALL 28 VERIFICATION TESTS (GAMEPLAY, MODALS, RIFTS, DYNAMIC ARROW, MEMORY, UNSTUCK, TIMER, AUTO LEVEL, RESTART, SPATIAL AI) PASSED!")
     print("================================================================================")
 
 
