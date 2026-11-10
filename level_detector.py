@@ -480,8 +480,8 @@ class GameTimerDetector:
         target_h = int(h * (target_w / w))
         norm = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
 
-        # Timer area at top center
-        roi = norm[32:65, 455:570]
+        # Timer area at top center (expanded to accommodate diverse aspect ratios)
+        roi = norm[20:70, 440:580]
         b, g, r = cv2.split(roi)
         # White text mask: immune to orange lava or dark terrain
         white = (b > 130) & (g > 130) & (r > 130) & (b.astype(int) + g.astype(int) + r.astype(int) > 480)
@@ -497,13 +497,13 @@ class GameTimerDetector:
         colon_x = None
         for i in range(len(glyphs) - 1):
             g1, g2 = glyphs[i], glyphs[i + 1]
-            if abs(g1[0] - g2[0]) <= 4 and g1[2] <= 6 and g2[2] <= 6 and 40 <= g1[0] <= 70:
+            if abs(g1[0] - g2[0]) <= 4 and g1[2] <= 6 and g2[2] <= 6 and 40 <= g1[0] <= 85:
                 colon_x = (g1[0] + g2[0]) / 2.0
                 break
 
         if colon_x is None:
             for g in glyphs:
-                if g[2] <= 6 and g[3] >= 6 and 40 <= g[0] <= 70:
+                if g[2] <= 6 and g[3] >= 6 and 40 <= g[0] <= 85:
                     colon_x = g[0] + g[2] / 2.0
                     break
 
@@ -539,9 +539,9 @@ class AutoVigorDetector:
         norm = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
 
         # Badges row below stat card: covers normal Mewtwo (y~162) and Mega Mewtwo (y~146)
-        # and accommodates horizontal badge shifting (x: 110..340)
-        roi_y1, roi_y2 = 138, 185
-        roi_x1, roi_x2 = 110, 340
+        # and accommodates dynamic horizontal badge shifting across all builds (x: 90..440)
+        roi_y1, roi_y2 = 130, 195
+        roi_x1, roi_x2 = 90, 440
         roi = norm[roi_y1:roi_y2, roi_x1:roi_x2]
         if roi.shape[0] < self.tpl_text.shape[0] or roi.shape[1] < self.tpl_text.shape[1]:
             return AutoVigorResult()

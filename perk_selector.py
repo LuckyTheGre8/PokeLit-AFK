@@ -29,6 +29,15 @@ import threading
 import time
 from pathlib import Path
 
+# Ensure Windows DPI awareness so all Win32 APIs, GetClientRect, ClientToScreen, and PyAutoGUI use physical pixels
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
 import pyautogui
 from pynput import keyboard
 
@@ -235,7 +244,7 @@ def execute_choice(choice: str) -> None:
 
 
 def execute_click(norm_x: int, norm_y: int) -> None:
-    """Click at normalized (1024x640) coordinate on target window or screen."""
+    """Click at normalized coordinate on target window or screen with physical DPI and aspect scaling."""
     global active_hwnd, active_win_input
 
     if active_hwnd and active_win_input:
@@ -244,17 +253,26 @@ def execute_click(norm_x: int, norm_y: int) -> None:
         cw = max(1, rect.right - rect.left)
         ch = max(1, rect.bottom - rect.top)
 
-        client_x = int(norm_x * (cw / 1024.0))
-        client_y = int(norm_y * (ch / 640.0))
+        # Scale uniformly matching frame normalization (target_w=1024, target_h=int(h * (1024/w)))
+        scale = cw / 1024.0
+        client_x = int(norm_x * scale)
+        client_y = int(norm_y * scale)
         screen_x, screen_y = active_win_input.client_to_screen(client_x, client_y)
 
         if FOCUS_FLICK:
             prev_fg = user32.GetForegroundWindow()
             try:
                 user32.SetForegroundWindow(active_hwnd)
-                time.sleep(0.04)
-                pyautogui.click(screen_x, screen_y)
+                time.sleep(0.06)
+                # Physical mouse down with 80ms hold duration for HTML5 canvas/WebGL events
+                pyautogui.moveTo(screen_x, screen_y)
+                time.sleep(0.02)
+                pyautogui.mouseDown(screen_x, screen_y, button="left")
+                time.sleep(0.08)
+                pyautogui.mouseUp(screen_x, screen_y, button="left")
+                # Win32 PostMessage backup
                 active_win_input.click(client_x, client_y)
+                time.sleep(0.08)
             finally:
                 if prev_fg and prev_fg != active_hwnd:
                     user32.SetForegroundWindow(prev_fg)
@@ -262,9 +280,14 @@ def execute_click(norm_x: int, norm_y: int) -> None:
             active_win_input.click(client_x, client_y)
     else:
         sw, sh = pyautogui.size()
-        screen_x = int(norm_x * (sw / 1024.0))
-        screen_y = int(norm_y * (sh / 640.0))
-        pyautogui.click(screen_x, screen_y)
+        scale = sw / 1024.0
+        screen_x = int(norm_x * scale)
+        screen_y = int(norm_y * scale)
+        pyautogui.moveTo(screen_x, screen_y)
+        time.sleep(0.02)
+        pyautogui.mouseDown(screen_x, screen_y, button="left")
+        time.sleep(0.08)
+        pyautogui.mouseUp(screen_x, screen_y, button="left")
 
 
 def monitor_loop() -> None:
@@ -419,6 +442,11 @@ def monitor_loop() -> None:
                                 timer_desc = "In-game timer >= 10:00" if timer_triggered else f"Elapsed match time: {elapsed_min:.1f}m"
                                 print(f"[AUTO VIGOR TRIGGERED] 10 minute mark reached! ({timer_desc})")
                                 print(f"Clicking AUTO VIGOR button at normalized {av_res.norm_point} (conf={av_res.confidence:.3f})...")
+
+                                # Temporarily pause WASD movement so keystrokes do not interfere with mouse click
+                                set_pause(True)
+                                time.sleep(0.08)
+
                                 execute_click(av_res.norm_point[0], av_res.norm_point[1])
                                 time.sleep(0.35)
 
@@ -430,7 +458,19 @@ def monitor_loop() -> None:
                                     print(f"[AUTO VIGOR ENABLED] Auto Vigor successfully turned on (AUTO VIGOR ON confirmed)!")
                                     print(f"All future level-ups will now be selected automatically by the game.")
                                 else:
-                                    print(f"[AUTO VIGOR] Click sent, will verify activation on next cycle...")
+                                    print(f"[AUTO VIGOR] Retrying click on AUTO VIGOR button...")
+                                    execute_click(av_res.norm_point[0], av_res.norm_point[1])
+                                    time.sleep(0.35)
+                                    check_frame2 = active_cap.grab_bgr()
+                                    check_av2 = auto_vigor_detector.detect(check_frame2)
+                                    if check_av2.is_active:
+                                        auto_vigor_active = True
+                                        print(f"[AUTO VIGOR ENABLED] Auto Vigor successfully turned on on retry!")
+                                        print(f"All future level-ups will now be selected automatically by the game.")
+                                    else:
+                                        print(f"[AUTO VIGOR] Click sent, will verify activation on next cycle...")
+
+                                set_pause(False)
                                 print(f"==================================================\n")
 
                 # 3. Third priority: Rift Detection & Navigation (Top Gameplay Priority)

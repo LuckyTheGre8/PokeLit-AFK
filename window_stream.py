@@ -15,6 +15,15 @@ import time
 from typing import Optional
 import numpy as np
 
+# Ensure Windows DPI awareness so all Win32 APIs, GetClientRect, ClientToScreen, and PyAutoGUI use physical pixels
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
 

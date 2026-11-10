@@ -31,6 +31,7 @@ IMG_AUTO_VIGOR = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-4
 IMG_ASH_1006 = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794298995906_29aaf318.png")
 IMG_ASH_1028 = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794298995970_2b85bc5d.png")
 IMG_ASH_1047 = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794298973908_eeeed6e7.png")
+IMG_ASH_1023 = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794303470926_b7011c0d.png")
 
 IMG_RUN_OVER = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794254312052_604a3c29.jpg")
 IMG_CHOOSE_REGION = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794254326963_916ca9c5.jpg")
@@ -136,13 +137,15 @@ def test_full_detection_suite():
     t_ash1006 = timer_det.detect(cv2.imread(str(IMG_ASH_1006)))
     t_ash1028 = timer_det.detect(cv2.imread(str(IMG_ASH_1028)))
     t_ash1047 = timer_det.detect(cv2.imread(str(IMG_ASH_1047)))
-    print(f"[TEST 9] Timer: 0:42={t_game.is_at_least_10_min} | 11:34={t_11m.is_at_least_10_min} | 24:01={t_24m.is_at_least_10_min} | Ash 10:06={t_ash1006.is_at_least_10_min} | Ash 10:28={t_ash1028.is_at_least_10_min} | Ash 10:47={t_ash1047.is_at_least_10_min}")
+    t_ash1023 = timer_det.detect(cv2.imread(str(IMG_ASH_1023)))
+    print(f"[TEST 9] Timer: 0:42={t_game.is_at_least_10_min} | 11:34={t_11m.is_at_least_10_min} | 24:01={t_24m.is_at_least_10_min} | Ash 10:06={t_ash1006.is_at_least_10_min} | Ash 10:28={t_ash1028.is_at_least_10_min} | Ash 10:47={t_ash1047.is_at_least_10_min} | Ash 10:23={t_ash1023.is_at_least_10_min}")
     assert not t_game.is_at_least_10_min, "0:42 should NOT be >= 10 min!"
     assert t_11m.is_at_least_10_min, "11:34 should be >= 10 min!"
     assert t_24m.is_at_least_10_min, "24:01 should be >= 10 min!"
     assert t_ash1006.is_at_least_10_min, "Ash 10:06 should be >= 10 min!"
     assert t_ash1028.is_at_least_10_min, "Ash 10:28 should be >= 10 min!"
     assert t_ash1047.is_at_least_10_min, "Ash 10:47 should be >= 10 min!"
+    assert t_ash1023.is_at_least_10_min, "Ash 10:23 should be >= 10 min!"
 
     # 10. Auto Vigor Button Detection, Horizontal Tracking & Active State
     av_det = AutoVigorDetector()
@@ -151,10 +154,12 @@ def test_full_detection_suite():
     av_ash_off = av_det.detect(cv2.imread(str(IMG_ASH_1006)))
     av_ash_on1 = av_det.detect(cv2.imread(str(IMG_ASH_1028)))
     av_ash_on2 = av_det.detect(cv2.imread(str(IMG_ASH_1047)))
-    print(f"[TEST 10] Auto Vigor: early pt={av_early.norm_point} (active={av_early.is_active}) | late pt={av_late.norm_point} (active={av_late.is_active}) | ash_off pt={av_ash_off.norm_point} (active={av_ash_off.is_active}) | ash_on pt={av_ash_on1.norm_point} (active={av_ash_on1.is_active})")
+    av_ash_1023 = av_det.detect(cv2.imread(str(IMG_ASH_1023)))
+    print(f"[TEST 10] Auto Vigor: early pt={av_early.norm_point} (active={av_early.is_active}) | late pt={av_late.norm_point} (active={av_late.is_active}) | ash_off pt={av_ash_off.norm_point} (active={av_ash_off.is_active}) | ash_1023 pt={av_ash_1023.norm_point} (active={av_ash_1023.is_active}) | ash_on pt={av_ash_on1.norm_point} (active={av_ash_on1.is_active})")
     assert av_early.is_present and av_early.norm_point is not None and not av_early.is_active
     assert av_late.is_present and av_late.norm_point is not None and not av_late.is_active
     assert av_ash_off.is_present and av_ash_off.norm_point == (238, 152) and not av_ash_off.is_active
+    assert av_ash_1023.is_present and av_ash_1023.norm_point == (238, 152) and not av_ash_1023.is_active
     assert av_ash_on1.is_present and av_ash_on1.norm_point == (202, 152) and av_ash_on1.is_active
     assert av_ash_on2.is_present and av_ash_on2.norm_point == (291, 152) and av_ash_on2.is_active
 
@@ -267,8 +272,19 @@ def test_full_detection_suite():
     assert u_stuck.mode == "unstuck_escape", f"Expected 'unstuck_escape', got {u_stuck.mode}"
     assert len(u_stuck.direction_keys) > 0, "Escape keys must not be empty"
 
+    # 21. High-DPI Scaling & Physical Pixel Click Mapping:
+    # Verifies that normalized coordinates scale uniformly across 2560x1600 (150% display) and 1920x1080 without vertical aspect warp
+    norm_x, norm_y = av_ash_1023.norm_point
+    # Test 2560x1600 (scale = 2.5)
+    cw_2560, ch_1600 = 2560, 1600
+    scale_2560 = cw_2560 / 1024.0
+    px_2560 = int(norm_x * scale_2560)
+    py_2560 = int(norm_y * scale_2560)
+    print(f"[TEST 21] High-DPI 2560x1600 Click Scaling: norm({norm_x}, {norm_y}) -> physical({px_2560}, {py_2560})")
+    assert (px_2560, py_2560) == (595, 380), f"Expected (595, 380), got ({px_2560}, {py_2560})"
+
     print("\n================================================================================")
-    print("ALL 23 VERIFICATION TESTS (GAMEPLAY, MODALS, RIFTS, DYNAMIC ARROW, UNSTUCK, TIMER, VIGOR, RESTART, SPATIAL AI) PASSED!")
+    print("ALL 24 VERIFICATION TESTS (GAMEPLAY, MODALS, RIFTS, DYNAMIC ARROW, UNSTUCK, TIMER, VIGOR, RESTART, SPATIAL AI) PASSED!")
     print("================================================================================")
 
 

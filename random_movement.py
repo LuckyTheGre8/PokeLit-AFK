@@ -19,12 +19,22 @@ Features:
 
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import random
 import threading
 import time
 from pathlib import Path
+
+# Ensure Windows DPI awareness so all Win32 APIs, GetClientRect, ClientToScreen, and PyAutoGUI use physical pixels
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
 
 import pyautogui
 from pynput import keyboard
