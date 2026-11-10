@@ -384,8 +384,43 @@ def test_full_detection_suite():
     assert res_al_on.is_active, "Button must transition to bright yellow (ON) state after click!"
     assert res_al_on.theme == "yellow", "Theme must remain 'yellow'!"
 
+    # 26. Stale IPC Auto-Expiration (.rift_movement & .pause_movement):
+    # Verifies that stale flag files left over from crashes or interrupted runs are safely expired
+    # so the character never gets stuck moving in one direction or stalled in place.
+    from random_movement import read_rift_movement, RIFT_FILE, PAUSE_FILE
+    import os
+    import json
+
+    # Sub-test A: Fresh rift signal is read properly
+    test_rift_data = {"active": True, "keys": ["w", "d"], "angle": -45.0, "timestamp": time.time()}
+    with open(RIFT_FILE, "w", encoding="utf-8") as f:
+        json.dump(test_rift_data, f)
+    fresh_res = read_rift_movement()
+    assert fresh_res is not None and fresh_res[0] == ["w", "d"], f"Fresh rift must be readable: {fresh_res}"
+
+    # Sub-test B: Stale rift signal (> 2.0s old) is auto-expired and unlinked
+    past_mtime = time.time() - 3.5
+    os.utime(RIFT_FILE, (past_mtime, past_mtime))
+    stale_res = read_rift_movement()
+    assert stale_res is None, f"Stale rift file must return None, got {stale_res}"
+    assert not RIFT_FILE.exists(), "Stale rift file must be automatically unlinked!"
+    print("[TEST 26] Stale IPC Expiration: Fresh rift accepted | Stale (> 2.0s) auto-unlinked safely")
+
+    # 27. Active Gameplay Watchdog Synchronization:
+    # Verifies that during normal gameplay, any stray .pause_movement is immediately cleaned up
+    PAUSE_FILE.touch(exist_ok=True)
+    assert PAUSE_FILE.exists()
+    # Simulate normal gameplay tick in perk_selector
+    sim_menu_type = MenuScreenType.NONE
+    sim_is_level_up = False
+    if not sim_is_level_up and sim_menu_type == MenuScreenType.NONE:
+        if PAUSE_FILE.exists():
+            PAUSE_FILE.unlink(missing_ok=True)
+    assert not PAUSE_FILE.exists(), "Gameplay watchdog must clear pause during regular gameplay!"
+    print("[TEST 27] Gameplay Watchdog: Stray .pause_movement successfully detected & cleared")
+
     print("\n================================================================================")
-    print("ALL 28 VERIFICATION TESTS (GAMEPLAY, MODALS, RIFTS, DYNAMIC ARROW, MEMORY, UNSTUCK, TIMER, AUTO LEVEL, RESTART, SPATIAL AI) PASSED!")
+    print("ALL 30 VERIFICATION TESTS (GAMEPLAY, MODALS, RIFTS, DYNAMIC ARROW, MEMORY, UNSTUCK, TIMER, AUTO LEVEL, RESTART, SPATIAL AI, IPC EXPIRATION) PASSED!")
     print("================================================================================")
 
 

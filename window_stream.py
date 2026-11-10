@@ -129,33 +129,39 @@ class WindowCapture:
             raise RuntimeError(f"Window {self.hwnd:#x} has zero size or is minimized.")
 
         hdc_window = user32.GetDC(self.hwnd)
+        if not hdc_window:
+            raise RuntimeError(f"GetDC failed for window {self.hwnd:#x}")
+
         hdc_mem = gdi32.CreateCompatibleDC(hdc_window)
         hbm = gdi32.CreateCompatibleBitmap(hdc_window, w, h)
-        gdi32.SelectObject(hdc_mem, hbm)
+        old_bmp = gdi32.SelectObject(hdc_mem, hbm)
 
-        # PrintWindow with PW_RENDERFULLCONTENT (0x02) copies the window backing store
-        user32.PrintWindow(self.hwnd, hdc_mem, PW_RENDERFULLCONTENT)
+        try:
+            # PrintWindow with PW_RENDERFULLCONTENT (0x02) copies the window backing store
+            user32.PrintWindow(self.hwnd, hdc_mem, PW_RENDERFULLCONTENT)
 
-        bmi = BITMAPINFOHEADER()
-        bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
-        bmi.biWidth = w
-        bmi.biHeight = -h  # Top-down bitmap
-        bmi.biPlanes = 1
-        bmi.biBitCount = 32
-        bmi.biCompression = 0
+            bmi = BITMAPINFOHEADER()
+            bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+            bmi.biWidth = w
+            bmi.biHeight = -h  # Top-down bitmap
+            bmi.biPlanes = 1
+            bmi.biBitCount = 32
+            bmi.biCompression = 0
 
-        buf = ctypes.create_string_buffer(w * h * 4)
-        gdi32.GetDIBits(hdc_mem, hbm, 0, h, buf, ctypes.byref(bmi), 0)
+            buf = ctypes.create_string_buffer(w * h * 4)
+            gdi32.GetDIBits(hdc_mem, hbm, 0, h, buf, ctypes.byref(bmi), 0)
 
-        raw = np.frombuffer(buf, dtype=np.uint8).reshape((h, w, 4))
-        bgr = raw[:, :, :3].copy()
-
-        # Clean up GDI resources
-        gdi32.DeleteObject(hbm)
-        gdi32.DeleteDC(hdc_mem)
-        user32.ReleaseDC(self.hwnd, hdc_window)
-
-        return bgr
+            raw = np.frombuffer(buf, dtype=np.uint8).reshape((h, w, 4))
+            return raw[:, :, :3].copy()
+        finally:
+            if old_bmp:
+                gdi32.SelectObject(hdc_mem, old_bmp)
+            if hbm:
+                gdi32.DeleteObject(hbm)
+            if hdc_mem:
+                gdi32.DeleteDC(hdc_mem)
+            if hdc_window:
+                user32.ReleaseDC(self.hwnd, hdc_window)
 
 
 class WindowInput:
@@ -166,14 +172,20 @@ class WindowInput:
         self.target_hwnd = self._resolve_target_hwnd()
 
     def _resolve_target_hwnd(self) -> int:
-        """Find the child window that handles input (e.g. RenderWidget or D3D window)."""
+        """Find the child window that handles web input (RenderWidgetHostHWND), avoiding GPU surface windows."""
         children: list[int] = []
+        my_pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(self.hwnd, ctypes.byref(my_pid))
 
         def enum_cb(ch: int, _: int) -> bool:
             buf = ctypes.create_unicode_buffer(256)
             user32.GetClassNameW(ch, buf, 256)
-            if buf.value in ("Chrome_RenderWidgetHostHWND", "Intermediate D3D Window"):
-                children.append(ch)
+            # Only match the actual web render widget host, NOT Intermediate D3D Window (which is in GPU subprocess)
+            if buf.value == "Chrome_RenderWidgetHostHWND":
+                ch_pid = wintypes.DWORD()
+                user32.GetWindowThreadProcessId(ch, ctypes.byref(ch_pid))
+                if ch_pid.value == my_pid.value:
+                    children.append(ch)
             return True
 
         cb = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)(enum_cb)
@@ -188,18 +200,20 @@ class WindowInput:
         lparam = 1 | (scan << 16)
         if is_repeat:
             lparam |= (1 << 30)  # Bit 30 = previous key state was down (typematic repeat)
-        user32.PostMessageW(self.target_hwnd, WM_KEYDOWN, vk, lparam)
-        if self.target_hwnd != self.hwnd:
-            user32.PostMessageW(self.hwnd, WM_KEYDOWN, vk, lparam)
+        user32.PostMessageW(self.hwnd, WM_KEYDOWN, vk, lparam)
+        if self.target_hwnd != self.hwnd and user32.IsWindow(self.target_hwnd):
+            user32.PostMessageW(self.target_hwnd, WM_KEYDOWN, vk, lparam)
 
     def key_up(self, key_str: str) -> None:
-        """Send WM_KEYUP to target window."""
+        """Send WM_KEYUP to target window (posted twice to guarantee delivery under GPU render load)."""
         vk = VK_CODES.get(key_str.lower(), ord(key_str.upper()))
         scan = user32.MapVirtualKeyW(vk, 0)
         lparam = 1 | (scan << 16) | (1 << 30) | (1 << 31)
-        user32.PostMessageW(self.target_hwnd, WM_KEYUP, vk, lparam)
-        if self.target_hwnd != self.hwnd:
-            user32.PostMessageW(self.hwnd, WM_KEYUP, vk, lparam)
+        user32.PostMessageW(self.hwnd, WM_KEYUP, vk, lparam)
+        user32.PostMessageW(self.hwnd, WM_KEYUP, vk, lparam)
+        if self.target_hwnd != self.hwnd and user32.IsWindow(self.target_hwnd):
+            user32.PostMessageW(self.target_hwnd, WM_KEYUP, vk, lparam)
+            user32.PostMessageW(self.target_hwnd, WM_KEYUP, vk, lparam)
 
     def tap(self, key_str: str, hold_duration: float = 0.08) -> None:
         """Send key down, wait, send key up to the specific window."""

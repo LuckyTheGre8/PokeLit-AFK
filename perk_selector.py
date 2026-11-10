@@ -214,10 +214,10 @@ def set_pause(active: bool) -> None:
 
 
 def set_rift_movement(active: bool, keys: list[str] | None = None, angle: float | None = None) -> None:
-    """Write or clear the active rift navigation steering keys."""
+    """Write or clear the active rift navigation steering keys with timestamp."""
     try:
         if active and keys:
-            data = json.dumps({"active": True, "keys": keys, "angle": angle})
+            data = json.dumps({"active": True, "keys": keys, "angle": angle, "timestamp": time.time()})
             temp_file = RIFT_FILE.with_suffix(".tmp")
             with open(temp_file, "w", encoding="utf-8") as f:
                 f.write(data)
@@ -423,68 +423,75 @@ def monitor_loop() -> None:
                 # 1. First priority: Check for Level-Up or Item Modal
                 result: DetectionResult = detector.detect(frame)
 
+                # Active Gameplay Pause Watchdog: If in normal gameplay with no modal and no menu,
+                # immediately ensure movement is unpaused so character never gets stuck.
+                if not result.is_level_up and (not AR_ENABLED or menu_res.screen_type == MenuScreenType.NONE):
+                    if PAUSE_FILE.exists():
+                        set_pause(False)
+
                 if result.is_level_up:
                     # Check if we were actively navigating a rift right before modal appeared
                     was_following_rift = (time.monotonic() - last_rift_seen_time < 2.5) and bool(last_active_rift_keys)
 
                     # Do NOT clear rift navigation file; only pause movement so rift heading is retained!
                     set_pause(True)
+                    try:
+                        modals_handled += 1
+                        modal_label = "LEVEL-UP" if result.modal_type == ModalType.LEVEL_UP else "ITEM WINDOW"
+                        print(f"\n==================================================")
+                        print(f" [{modal_label} DETECTED #{modals_handled}]")
+                        print(f" Type: {result.modal_type.value} | Options: {result.option_count} | Confidence: {result.confidence:.3f}")
+                        print(f" Pausing movement...")
 
-                    modals_handled += 1
-                    modal_label = "LEVEL-UP" if result.modal_type == ModalType.LEVEL_UP else "ITEM WINDOW"
-                    print(f"\n==================================================")
-                    print(f" [{modal_label} DETECTED #{modals_handled}]")
-                    print(f" Type: {result.modal_type.value} | Options: {result.option_count} | Confidence: {result.confidence:.3f}")
-                    print(f" Pausing movement...")
+                        time.sleep(SETTLE_SEC)
 
-                    time.sleep(SETTLE_SEC)
-
-                    choice = selector.decide_choice(result.modal_type, result.option_count)
-                    if result.modal_type == ModalType.ITEM:
-                        action_desc = f"Item Modal ({result.option_count} options -> selecting [{choice}])"
-                    else:
-                        action_desc = f"Selecting perk [{choice}]"
-                    print(f" -> {action_desc} (Tapping key [{choice}])...")
-                    execute_choice(choice)
-
-                    dismissed = False
-                    start_wait = time.monotonic()
-                    while time.monotonic() - start_wait < MAX_WAIT:
-                        time.sleep(0.12)
-                        check_frame = active_cap.grab_bgr()
-                        if not detector.detect(check_frame).is_level_up:
-                            dismissed = True
-                            break
-                        if time.monotonic() - start_wait > 0.5:
-                            execute_choice(choice)
-
-                    if dismissed:
-                        elapsed = time.monotonic() - start_wait
-                        print(f" -> Modal dismissed successfully ({elapsed:.2f}s).")
-                    else:
-                        print(" -> [WARN] Modal dismissal wait timed out.")
-
-                    time.sleep(POST_WAIT)
-
-                    # Seamless Rift Continuation: re-verify rift portal/arrow BEFORE unpausing
-                    if RIFT_ENABLED:
-                        fresh_frame = active_cap.grab_bgr()
-                        fresh_rift = rift_detector.detect(fresh_frame)
-                        if fresh_rift.is_active and fresh_rift.direction_keys:
-                            last_active_rift_keys = list(fresh_rift.direction_keys)
-                            last_active_rift_angle = fresh_rift.angle_deg
-                            last_rift_seen_time = time.monotonic()
-                            set_rift_movement(True, fresh_rift.direction_keys, fresh_rift.angle_deg)
-                            print(f" -> Rift path re-acquired immediately: Steering {fresh_rift.direction_keys} (Angle: {fresh_rift.angle_deg}°)")
-                        elif was_following_rift and last_active_rift_keys:
-                            # CRITICAL FIX: Retain rift heading through level-up dismissal so character does not wander off
-                            last_rift_seen_time = time.monotonic()
-                            set_rift_movement(True, last_active_rift_keys, last_active_rift_angle)
-                            print(f" -> Rift path preserved through modal: Continuing {last_active_rift_keys} (Angle: {last_active_rift_angle}°)")
+                        choice = selector.decide_choice(result.modal_type, result.option_count)
+                        if result.modal_type == ModalType.ITEM:
+                            action_desc = f"Item Modal ({result.option_count} options -> selecting [{choice}])"
                         else:
-                            set_rift_movement(False)
+                            action_desc = f"Selecting perk [{choice}]"
+                        print(f" -> {action_desc} (Tapping key [{choice}])...")
+                        execute_choice(choice)
 
-                    set_pause(False)
+                        dismissed = False
+                        start_wait = time.monotonic()
+                        while time.monotonic() - start_wait < MAX_WAIT:
+                            time.sleep(0.12)
+                            check_frame = active_cap.grab_bgr()
+                            if not detector.detect(check_frame).is_level_up:
+                                dismissed = True
+                                break
+                            if time.monotonic() - start_wait > 0.5:
+                                execute_choice(choice)
+
+                        if dismissed:
+                            elapsed = time.monotonic() - start_wait
+                            print(f" -> Modal dismissed successfully ({elapsed:.2f}s).")
+                        else:
+                            print(" -> [WARN] Modal dismissal wait timed out.")
+
+                        time.sleep(POST_WAIT)
+
+                        # Seamless Rift Continuation: re-verify rift portal/arrow BEFORE unpausing
+                        if RIFT_ENABLED:
+                            fresh_frame = active_cap.grab_bgr()
+                            fresh_rift = rift_detector.detect(fresh_frame)
+                            if fresh_rift.is_active and fresh_rift.direction_keys:
+                                last_active_rift_keys = list(fresh_rift.direction_keys)
+                                last_active_rift_angle = fresh_rift.angle_deg
+                                last_rift_seen_time = time.monotonic()
+                                set_rift_movement(True, fresh_rift.direction_keys, fresh_rift.angle_deg)
+                                print(f" -> Rift path re-acquired immediately: Steering {fresh_rift.direction_keys} (Angle: {fresh_rift.angle_deg}°)")
+                            elif was_following_rift and last_active_rift_keys:
+                                # CRITICAL FIX: Retain rift heading through level-up dismissal so character does not wander off
+                                last_rift_seen_time = time.monotonic()
+                                set_rift_movement(True, last_active_rift_keys, last_active_rift_angle)
+                                print(f" -> Rift path preserved through modal: Continuing {last_active_rift_keys} (Angle: {last_active_rift_angle}°)")
+                            else:
+                                set_rift_movement(False)
+                    finally:
+                        set_pause(False)
+
                     print(" Resuming movement loop.")
                     print("==================================================\n")
                     continue
@@ -493,18 +500,21 @@ def monitor_loop() -> None:
                 # When at the start of a level, verify if AUTO LEVEL is present.
                 # If it is dark yellow (OFF), click it ONCE and verify it transitions to bright yellow (ON)!
                 # Once confirmed bright yellow, it stays locked ON and will not be clicked again for this match.
-                if AL_ENABLED and not auto_level_confirmed_on:
+                if AL_ENABLED:
                     al_res = auto_level_detector.detect(frame)
                     now_v = time.monotonic()
                     if al_res.is_present and al_res.norm_point:
+                        if not al_res.is_active:
+                            # Button is currently dark yellow (OFF)
+                            auto_level_confirmed_on = False
                         if al_res.is_active:
-                            # Already bright yellow / active
-                            auto_level_confirmed_on = True
-                            print(f"\n==================================================")
-                            print(f" [AUTO LEVEL CONFIRMED] Button is already ACTIVE (bright yellow) at {al_res.norm_point}!")
-                            print(f" In-game auto-level preset is active for this match.")
-                            print(f"==================================================\n")
-                        elif (now_v - last_level_toggle_time >= 2.0):
+                            if not auto_level_confirmed_on:
+                                auto_level_confirmed_on = True
+                                print(f"\n==================================================")
+                                print(f" [AUTO LEVEL CONFIRMED] Button is already ACTIVE (bright yellow) at {al_res.norm_point}!")
+                                print(f" In-game auto-level preset is active for this match.")
+                                print(f"==================================================\n")
+                        elif (not auto_level_confirmed_on) and (now_v - last_level_toggle_time >= 2.0):
                             last_level_toggle_time = now_v
                             theme_label = "dark yellow" if al_res.theme == "yellow" else "inactive"
                             print(f"\n==================================================")
@@ -512,29 +522,31 @@ def monitor_loop() -> None:
                             print(f" -> Button confirmed at {al_res.norm_point} in {theme_label} state.")
                             print(f" -> Clicking once to turn AUTO LEVEL ON...")
                             set_pause(True)
-                            time.sleep(0.08)
-                            execute_click(al_res.norm_point[0], al_res.norm_point[1])
-
-                            # Settle wait for in-game click reaction
-                            time.sleep(0.35)
-                            check_frame = active_cap.grab_bgr()
-                            check_al = auto_level_detector.detect(check_frame)
-                            if check_al.is_active:
-                                auto_level_confirmed_on = True
-                                print(f" -> [CONFIRMED] Button transitioned from dark yellow to bright yellow (AUTO LEVEL ON)!")
-                                print(f" -> Auto Level is now active for this match.")
-                            else:
-                                print(f" -> Transition check inconclusive; retrying single click...")
+                            try:
+                                time.sleep(0.08)
                                 execute_click(al_res.norm_point[0], al_res.norm_point[1])
+
+                                # Settle wait for in-game click reaction
                                 time.sleep(0.35)
-                                check_frame2 = active_cap.grab_bgr()
-                                check_al2 = auto_level_detector.detect(check_frame2)
-                                if check_al2.is_active:
+                                check_frame = active_cap.grab_bgr()
+                                check_al = auto_level_detector.detect(check_frame)
+                                if check_al.is_active:
                                     auto_level_confirmed_on = True
-                                    print(f" -> [CONFIRMED ON RETRY] Button transitioned to bright yellow (AUTO LEVEL ON)!")
+                                    print(f" -> [CONFIRMED] Button transitioned from dark yellow to bright yellow (AUTO LEVEL ON)!")
+                                    print(f" -> Auto Level is now active for this match.")
                                 else:
-                                    print(f" -> [WARN] Bright yellow state not confirmed yet; will check again next cycle.")
-                            set_pause(False)
+                                    print(f" -> Transition check inconclusive; retrying single click...")
+                                    execute_click(al_res.norm_point[0], al_res.norm_point[1])
+                                    time.sleep(0.35)
+                                    check_frame2 = active_cap.grab_bgr()
+                                    check_al2 = auto_level_detector.detect(check_frame2)
+                                    if check_al2.is_active:
+                                        auto_level_confirmed_on = True
+                                        print(f" -> [CONFIRMED ON RETRY] Button transitioned to bright yellow (AUTO LEVEL ON)!")
+                                    else:
+                                        print(f" -> [WARN] Bright yellow state not confirmed yet; will check again next cycle.")
+                            finally:
+                                set_pause(False)
                             print(f"==================================================\n")
 
                 # 3. Third priority: Rift Detection & Navigation (Top Gameplay Priority)

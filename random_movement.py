@@ -149,10 +149,15 @@ def release_all_keys() -> None:
 
 
 def read_rift_movement() -> tuple[list[str], float | None] | None:
-    """Read active rift target direction keys if .rift_movement exists."""
+    """Read active rift target direction keys if .rift_movement exists and is fresh (< 2.0s)."""
     if not RIFT_FILE.exists():
         return None
     try:
+        # Check staleness: if .rift_movement has not been updated in > 2.0s, auto-expire it
+        age = time.time() - RIFT_FILE.stat().st_mtime
+        if age > 2.0:
+            RIFT_FILE.unlink(missing_ok=True)
+            return None
         with open(RIFT_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
             if data.get("active") and data.get("keys"):
@@ -193,19 +198,28 @@ def movement_loop() -> None:
     last_mode = ""
     last_mode_log_time = 0.0
     last_key_flush_time = 0.0
+    last_keepalive_time = 0.0
     active_keys_held: set[str] = set()
     opposing_keys = {"w": "s", "s": "w", "a": "d", "d": "a"}
 
     try:
         while running.is_set() and not shutdown.is_set():
-            # 1. Check if paused for modal selection (level-up or item)
+            # 1. Check if paused for modal selection (level-up, item, or menu)
             if PAUSE_FILE.exists():
-                if active_keys_held:
-                    release_all_keys()
-                    active_keys_held.clear()
-                last_rift_time = time.monotonic()  # Freeze rift grace window during modal pause
-                time.sleep(0.05)
-                continue
+                try:
+                    pause_age = time.time() - PAUSE_FILE.stat().st_mtime
+                    if pause_age > 3.0:
+                        # Auto-expire stale leftover pause signal (> 3.0s) so bot never hangs indefinitely
+                        PAUSE_FILE.unlink(missing_ok=True)
+                    else:
+                        if active_keys_held:
+                            release_all_keys()
+                            active_keys_held.clear()
+                        last_rift_time = time.monotonic()  # Freeze rift grace window during modal pause
+                        time.sleep(0.05)
+                        continue
+                except Exception:
+                    PAUSE_FILE.unlink(missing_ok=True)
 
             # 2. Check for active rift navigation signal
             rift_info = read_rift_movement()
@@ -245,8 +259,8 @@ def movement_loop() -> None:
                         if opp:
                             to_release.add(opp)
 
-                    # Periodic hygiene flush: ensure no stale ghost keys are held in background
-                    if now - last_key_flush_time > 1.5:
+                    # Periodic anti-ghost key hygiene flush (every 1.0s): ensure no stale keys are held in background
+                    if now - last_key_flush_time > 1.0:
                         last_key_flush_time = now
                         for non_k in set(KEYS) - target_keys:
                             to_release.add(non_k)
@@ -254,9 +268,14 @@ def movement_loop() -> None:
                     for k in to_release:
                         if active_win_input:
                             active_win_input.key_up(k)
-                        else:
+                        try:
                             kb.release(k)
+                        except Exception:
+                            pass
+                        try:
                             pyautogui.keyUp(k)
+                        except Exception:
+                            pass
                         active_keys_held.discard(k)
 
                     # Press newly added direction keys
@@ -268,10 +287,12 @@ def movement_loop() -> None:
                             kb.press(k)
                             pyautogui.keyDown(k)
 
-                    # Maintain continuous hold via typematic repeat pulse (with is_repeat flag)
-                    for k in target_keys:
-                        if active_win_input:
-                            active_win_input.key_down(k, is_repeat=True)
+                    # Gentle keepalive pulse (every 1.0s instead of every 35ms) to prevent message queue congestion
+                    if now - last_keepalive_time > 1.0:
+                        last_keepalive_time = now
+                        for k in target_keys:
+                            if active_win_input:
+                                active_win_input.key_down(k, is_repeat=True)
 
                     active_keys_held = set(target_keys)
                     time.sleep(REPEAT_INTERVAL)
