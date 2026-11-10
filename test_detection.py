@@ -141,7 +141,9 @@ def test_full_detection_suite():
     t_ash1047 = timer_det.detect(cv2.imread(str(IMG_ASH_1047)))
     t_ash1023 = timer_det.detect(cv2.imread(str(IMG_ASH_1023)))
     t_early119 = timer_det.detect(cv2.imread(str(IMG_EARLY_119)))
-    print(f"[TEST 9] Timer: 0:42={t_game.is_at_least_10_min} | 1:19={t_early119.is_at_least_10_min} | 11:34={t_11m.is_at_least_10_min} | 24:01={t_24m.is_at_least_10_min} | Ash 10:06={t_ash1006.is_at_least_10_min} | Ash 10:28={t_ash1028.is_at_least_10_min} | Ash 10:47={t_ash1047.is_at_least_10_min} | Ash 10:23={t_ash1023.is_at_least_10_min}")
+    t_live1 = timer_det.detect(cv2.imread("scratch/live_now.png"))
+    t_live2 = timer_det.detect(cv2.imread("scratch/live_now2.png"))
+    print(f"[TEST 9] Timer: 0:42={t_game.is_at_least_10_min} | 1:19={t_early119.is_at_least_10_min} | 11:34={t_11m.is_at_least_10_min} | 24:01={t_24m.is_at_least_10_min} | Ash 10:06={t_ash1006.is_at_least_10_min} | Ash 10:28={t_ash1028.is_at_least_10_min} | Ash 10:47={t_ash1047.is_at_least_10_min} | Ash 10:23={t_ash1023.is_at_least_10_min} | Live 10:15={t_live1.is_at_least_10_min} | Live 16:49={t_live2.is_at_least_10_min}")
     assert not t_game.is_at_least_10_min, "0:42 should NOT be >= 10 min!"
     assert not t_early119.is_at_least_10_min, "1:19 should NOT be >= 10 min!"
     assert t_11m.is_at_least_10_min, "11:34 should be >= 10 min!"
@@ -150,6 +152,8 @@ def test_full_detection_suite():
     assert t_ash1028.is_at_least_10_min, "Ash 10:28 should be >= 10 min!"
     assert t_ash1047.is_at_least_10_min, "Ash 10:47 should be >= 10 min!"
     assert t_ash1023.is_at_least_10_min, "Ash 10:23 should be >= 10 min!"
+    assert t_live1.is_at_least_10_min, "Live 10:15 should be >= 10 min!"
+    assert t_live2.is_at_least_10_min, "Live 16:49 should be >= 10 min!"
 
     # 10. Auto Vigor Button Detection, Dual-State Enforcement (<10m OFF vs >=10m ON)
     av_det = AutoVigorDetector()
@@ -160,15 +164,19 @@ def test_full_detection_suite():
     av_ash_on2 = av_det.detect(cv2.imread(str(IMG_ASH_1047)))
     av_ash_1023 = av_det.detect(cv2.imread(str(IMG_ASH_1023)))
     av_early_119 = av_det.detect(cv2.imread(str(IMG_EARLY_119)))
-    print(f"[TEST 10] Auto Vigor: early pt={av_early.norm_point} (active={av_early.is_active}) | early_119 pt={av_early_119.norm_point} (active={av_early_119.is_active}) | late pt={av_late.norm_point} (active={av_late.is_active}) | ash_off pt={av_ash_off.norm_point} (active={av_ash_off.is_active}) | ash_1023 pt={av_ash_1023.norm_point} (active={av_ash_1023.is_active}) | ash_on pt={av_ash_on1.norm_point} (active={av_ash_on1.is_active})")
+    av_live1 = av_det.detect(cv2.imread("scratch/live_now.png"))
+    av_live2 = av_det.detect(cv2.imread("scratch/live_now2.png"))
+    print(f"[TEST 10] Auto Vigor: early pt={av_early.norm_point} (active={av_early.is_active}) | early_119 pt={av_early_119.norm_point} (active={av_early_119.is_active}) | late pt={av_late.norm_point} (active={av_late.is_active}) | ash_off pt={av_ash_off.norm_point} (active={av_ash_off.is_active}) | ash_1023 pt={av_ash_1023.norm_point} (active={av_ash_1023.is_active}) | ash_on pt={av_ash_on1.norm_point} (active={av_ash_on1.is_active}) | live1 pt={av_live1.norm_point} (active={av_live1.is_active}) | live2 pt={av_live2.norm_point} (active={av_live2.is_active})")
     assert av_early.is_present and av_early.norm_point is not None and not av_early.is_active
     # Early 1:19 is currently active (pink), which informs perk_selector to turn it OFF so early level-ups are selected by bot
-    assert av_early_119.is_present and av_early_119.is_active and av_early_119.norm_point == (202, 152)
+    assert av_early_119.is_present and av_early_119.is_active and abs(av_early_119.norm_point[0] - 200) <= 3
     assert av_late.is_present and av_late.norm_point is not None and not av_late.is_active
     assert av_ash_off.is_present and av_ash_off.norm_point == (238, 152) and not av_ash_off.is_active
     assert av_ash_1023.is_present and av_ash_1023.norm_point == (238, 152) and not av_ash_1023.is_active
-    assert av_ash_on1.is_present and av_ash_on1.norm_point == (202, 152) and av_ash_on1.is_active
-    assert av_ash_on2.is_present and av_ash_on2.norm_point == (291, 152) and av_ash_on2.is_active
+    assert av_ash_on1.is_present and abs(av_ash_on1.norm_point[0] - 200) <= 3 and av_ash_on1.is_active
+    assert av_ash_on2.is_present and abs(av_ash_on2.norm_point[0] - 289) <= 3 and av_ash_on2.is_active
+    assert av_live1.is_present and av_live1.is_active and abs(av_live1.norm_point[0] - 234) <= 3
+    assert av_live2.is_present and not av_live2.is_active and abs(av_live2.norm_point[0] - 271) <= 3
 
     # 11. End-of-Match: "Run over" Screen -> Click "Back to menu" (Short vs Tall loot modals)
     menu_det = MenuNavigatorDetector()

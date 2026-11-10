@@ -480,42 +480,71 @@ class GameTimerDetector:
         target_h = int(h * (target_w / w))
         norm = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
 
-        # Timer area at top center (expanded to accommodate diverse aspect ratios)
+        # Timer area at top center
         roi = norm[20:70, 440:580]
         b, g, r = cv2.split(roi)
         # White text mask: immune to orange lava or dark terrain
         white = (b > 130) & (g > 130) & (r > 130) & (b.astype(int) + g.astype(int) + r.astype(int) > 480)
 
         num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(white.astype(np.uint8) * 255)
-        glyphs = []
+
+        # 1. First find main timer digits: tall white glyphs (gh >= 12, area >= 25, 25 <= gx <= 120)
+        digits = []
         for i in range(1, num_labels):
             gx, gy, gw, gh, area = stats[i]
-            if area >= 5 and gh >= 3:
-                glyphs.append((gx, gy, gw, gh, area))
-        glyphs.sort(key=lambda g: g[0])
+            if gh >= 12 and area >= 25 and 25 <= gx <= 120:
+                digits.append((gx, gy, gw, gh, area, centroids[i]))
 
+        if not digits:
+            return GameTimerResult(detected=False)
+
+        # The timer digits share a distinct vertical center line
+        med_cy = float(np.median([d[5][1] for d in digits]))
+
+        # Filter digits to only those on the same vertical baseline as the timer (within 8px of median cy)
+        digits = [d for d in digits if abs(d[5][1] - med_cy) <= 8]
+        if not digits:
+            return GameTimerResult(detected=False)
+
+        # 2. Find colon between digits (must be vertically aligned with med_cy)
         colon_x = None
-        for i in range(len(glyphs) - 1):
-            g1, g2 = glyphs[i], glyphs[i + 1]
-            if abs(g1[0] - g2[0]) <= 4 and g1[2] <= 6 and g2[2] <= 6 and 40 <= g1[0] <= 85:
-                colon_x = (g1[0] + g2[0]) / 2.0
+
+        # Check for pair of vertically stacked dots (e.g. the two dots of ':')
+        dots = []
+        for i in range(1, num_labels):
+            gx, gy, gw, gh, area = stats[i]
+            cx, cy = centroids[i]
+            if 35 <= gx <= 90 and abs(cy - med_cy) <= 8 and gw <= 7 and gh <= 7:
+                dots.append((gx, gy, gw, gh, area, (cx, cy)))
+
+        for i in range(len(dots)):
+            for j in range(i + 1, len(dots)):
+                d1, d2 = dots[i], dots[j]
+                if abs(d1[5][0] - d2[5][0]) <= 3 and 3 <= abs(d1[5][1] - d2[5][1]) <= 14:
+                    colon_x = (d1[5][0] + d2[5][0]) / 2.0
+                    break
+            if colon_x is not None:
                 break
 
+        # Check for merged colon glyph (single component with gh >= 5, gw <= 7)
         if colon_x is None:
-            for g in glyphs:
-                if g[2] <= 6 and g[3] >= 6 and 40 <= g[0] <= 85:
-                    colon_x = g[0] + g[2] / 2.0
+            for i in range(1, num_labels):
+                gx, gy, gw, gh, area = stats[i]
+                cx, cy = centroids[i]
+                if 35 <= gx <= 90 and abs(cy - med_cy) <= 8 and gw <= 7 and gh >= 5:
+                    colon_x = cx
                     break
 
         if colon_x is None:
             return GameTimerResult(detected=False)
 
-        digits_left = [g for g in glyphs if g[0] + g[2] < colon_x and g[3] >= 8 and g[2] >= 3]
+        digits_left = [d for d in digits if d[5][0] < colon_x]
         if len(digits_left) >= 2:
             return GameTimerResult(detected=True, minutes_category=10, is_at_least_10_min=True)
         elif len(digits_left) == 1:
             return GameTimerResult(detected=True, minutes_category=0, is_at_least_10_min=False)
-        return GameTimerResult(detected=True, minutes_category=None, is_at_least_10_min=False)
+
+        return GameTimerResult(detected=False, minutes_category=None, is_at_least_10_min=False)
 
 
 class AutoVigorDetector:
@@ -526,6 +555,7 @@ class AutoVigorDetector:
             templates_dir = Path(__file__).resolve().parent / "templates"
         self.templates_dir = Path(templates_dir)
         self.tpl_text = cv2.imread(str(self.templates_dir / "auto_vigor_text.png"))
+        self.tpl_on = cv2.imread(str(self.templates_dir / "auto_vigor_on.png"))
 
     def detect(self, frame: np.ndarray) -> AutoVigorResult:
         if self.tpl_text is None:
@@ -546,33 +576,52 @@ class AutoVigorDetector:
         if roi.shape[0] < self.tpl_text.shape[0] or roi.shape[1] < self.tpl_text.shape[1]:
             return AutoVigorResult()
 
-        res = cv2.matchTemplate(roi, self.tpl_text, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+        # Match OFF template ("AUTO VIGOR" in dark grey/red)
+        res_off = cv2.matchTemplate(roi, self.tpl_text, cv2.TM_CCOEFF_NORMED)
+        _, max_off, _, loc_off = cv2.minMaxLoc(res_off)
 
-        if max_val < 0.60:
-            return AutoVigorResult(is_present=False, confidence=round(float(max_val), 4))
+        # Match ON template ("AUTO VIGOR ON" in white with pink border)
+        max_on = 0.0
+        loc_on = (0, 0)
+        if self.tpl_on is not None and roi.shape[0] >= self.tpl_on.shape[0] and roi.shape[1] >= self.tpl_on.shape[1]:
+            res_on = cv2.matchTemplate(roi, self.tpl_on, cv2.TM_CCOEFF_NORMED)
+            _, max_on_val, _, loc_on = cv2.minMaxLoc(res_on)
+            max_on = float(max_on_val)
 
-        th, tw = self.tpl_text.shape[:2]
-        click_x = roi_x1 + max_loc[0] + tw // 2
-        click_y = roi_y1 + max_loc[1] + th // 2
+        best_score = max(float(max_off), max_on)
+        if best_score < 0.60:
+            return AutoVigorResult(is_present=False, confidence=round(best_score, 4))
 
-        # Check if pill has pink active border or "AUTO VIGOR ON" extension
-        pill_crop = norm[max(0, click_y - 6) : min(target_h, click_y + 7), max(0, click_x - 25) : min(target_w, click_x + 25)]
-        b, g, r = cv2.split(pill_crop)
-        pink_px = int(((r.astype(int) > 140) & (b.astype(int) > 110) & (g.astype(int) < 110) & (r.astype(int) > g.astype(int) + 40)).sum())
+        # Determine whether button is ON or OFF:
+        # 1. Direct template score comparison
+        # 2. Pink border pixel verification around candidate point
+        if max_on > max_off and max_on >= 0.70:
+            th, tw = self.tpl_on.shape[:2]
+            click_x = roi_x1 + loc_on[0] + tw // 2
+            click_y = roi_y1 + loc_on[1] + th // 2
+            is_active = True
+        else:
+            th, tw = self.tpl_text.shape[:2]
+            click_x = roi_x1 + loc_off[0] + tw // 2
+            click_y = roi_y1 + loc_off[1] + th // 2
 
-        right_crop = norm[max(0, click_y - 5) : min(target_h, click_y + 6), min(target_w, click_x + 18) : min(target_w, click_x + 36)]
-        right_pink = 0
-        if right_crop.size > 0:
-            right_pink = int(((right_crop[:, :, 2].astype(int) > 140) & (right_crop[:, :, 0].astype(int) > 110)).sum())
+            # Check if pill has pink active border or "AUTO VIGOR ON" extension
+            pill_crop = norm[max(0, click_y - 6) : min(target_h, click_y + 7), max(0, click_x - 25) : min(target_w, click_x + 25)]
+            b, g, r = cv2.split(pill_crop)
+            pink_px = int(((r.astype(int) > 140) & (b.astype(int) > 110) & (g.astype(int) < 110) & (r.astype(int) > g.astype(int) + 40)).sum())
 
-        is_active = (pink_px > 25) or (right_pink > 10)
+            right_crop = norm[max(0, click_y - 5) : min(target_h, click_y + 6), min(target_w, click_x + 18) : min(target_w, click_x + 36)]
+            right_pink = 0
+            if right_crop.size > 0:
+                right_pink = int(((right_crop[:, :, 2].astype(int) > 140) & (right_crop[:, :, 0].astype(int) > 110)).sum())
+
+            is_active = (pink_px > 25) or (right_pink > 10)
 
         return AutoVigorResult(
             is_present=True,
             is_active=bool(is_active),
             norm_point=(click_x, click_y),
-            confidence=round(float(max_val), 4),
+            confidence=round(best_score, 4),
         )
 
 

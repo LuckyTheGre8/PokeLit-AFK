@@ -312,6 +312,8 @@ def monitor_loop() -> None:
     last_rift_seen_time = 0.0
     last_vigor_toggle_time = 0.0
     global auto_vigor_active
+    past_10m_latched = False
+    early_timer_streak = 0
 
     try:
         while running.is_set() and not shutdown.is_set():
@@ -359,6 +361,8 @@ def monitor_loop() -> None:
                             # Reset match start time and Auto Vigor flag for the fresh game
                             match_start_time = time.monotonic()
                             auto_vigor_active = False
+                            past_10m_latched = False
+                            early_timer_streak = 0
 
                             set_pause(False)
                             print(f" [NEW MATCH STARTED] Movement and perk selection active!")
@@ -427,22 +431,32 @@ def monitor_loop() -> None:
                 # Rule: For the first 10 minutes on the timer, Auto Vigor MUST BE OFF (so bot selects level-up perks 1/2/3).
                 #       After 10:00 on the timer, Auto Vigor MUST BE ON (so game selects level-ups automatically).
                 if AV_ENABLED:
-                    is_past_10m = False
+                    is_past_10m = past_10m_latched
                     timer_is_valid = False
 
                     if AV_USE_GAME_TIMER:
                         t_res = timer_detector.detect(frame)
                         if t_res.detected:
                             timer_is_valid = True
-                            is_past_10m = t_res.is_at_least_10_min
+                            if t_res.is_at_least_10_min:
+                                past_10m_latched = True
+                                is_past_10m = True
+                                early_timer_streak = 0
+                            else:
+                                early_timer_streak += 1
+                                if early_timer_streak >= 15:  # ~1.8s of consistent early timer unlatches
+                                    past_10m_latched = False
+                                    is_past_10m = False
 
-                    if not timer_is_valid:
+                    if not is_past_10m and not timer_is_valid:
                         elapsed_min = (time.monotonic() - match_start_time) / 60.0
-                        is_past_10m = (elapsed_min >= AV_TRIGGER_MIN)
+                        if elapsed_min >= AV_TRIGGER_MIN:
+                            past_10m_latched = True
+                            is_past_10m = True
 
                     av_res = auto_vigor_detector.detect(frame)
                     now_v = time.monotonic()
-                    if av_res.is_present and (now_v - last_vigor_toggle_time >= 1.5):
+                    if av_res.is_present and (now_v - last_vigor_toggle_time >= 2.0):
                         if not is_past_10m:
                             # BEFORE 10 MINUTES: Auto Vigor MUST be OFF so the bot can choose perks
                             auto_vigor_active = False
@@ -467,7 +481,7 @@ def monitor_loop() -> None:
                                 print(f"==================================================\n")
                         else:
                             # AT OR AFTER 10 MINUTES: Auto Vigor MUST be ON so gameplay is uninterrupted
-                            if not av_res.is_active and not auto_vigor_active:
+                            if not av_res.is_active:
                                 last_vigor_toggle_time = now_v
                                 print(f"\n==================================================")
                                 print(f"[AUTO VIGOR TRIGGERED] 10 minute mark reached! In-game timer >= 10:00.")
@@ -494,7 +508,7 @@ def monitor_loop() -> None:
                                         print(f"All future level-ups will now be selected automatically by the game.")
                                 set_pause(False)
                                 print(f"==================================================\n")
-                            elif av_res.is_active:
+                            else:
                                 auto_vigor_active = True
 
                 # 3. Third priority: Rift Detection & Navigation (Top Gameplay Priority)
