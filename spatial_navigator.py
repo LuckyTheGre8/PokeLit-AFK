@@ -75,21 +75,39 @@ class TerrainMotionTracker:
         last_heading_deg: float,
         commanded_keys: list[str],
         now: float,
+        is_rift_mode: bool = False,
     ) -> tuple[bool, list[str], float]:
         """Detect if character is pinned against an obstacle or wall."""
-        # 1. Anti-pinning timeout: same direction held continuously without change
+        if is_rift_mode:
+            # During active rift push, preserve direct pathing to rift without false obstacle interruptions
+            self.is_stuck = False
+            self.unstuck_keys = []
+            self.escape_attempt = 0
+            self.stuck_start_time = None
+            self.same_keys_start_time = now
+            return False, [], 0.0
+
+        # 1. Active escape maneuver execution window:
+        # Once the 0.65s escape maneuver finishes, immediately reset is_stuck to False so bot NEVER stays trapped!
+        if self.is_stuck and now >= self.unstuck_until_time:
+            self.is_stuck = False
+            self.unstuck_keys = []
+            self.escape_attempt = 0
+            self.stuck_start_time = None
+            self.same_keys_start_time = now
+
+        if self.is_stuck and now < self.unstuck_until_time:
+            return True, self.unstuck_keys, self.unstuck_heading_deg
+
+        # 2. Anti-pinning timeout: same direction held continuously without change
         if commanded_keys == self.last_commanded_keys and commanded_keys:
             if self.same_keys_start_time == 0.0:
                 self.same_keys_start_time = now
-            elif now - self.same_keys_start_time >= 3.2 and not self.is_stuck:
+            elif (now - self.same_keys_start_time >= 4.0) and not self.is_stuck:
                 self._trigger_escape(last_heading_deg, now)
         else:
             self.last_commanded_keys = list(commanded_keys)
             self.same_keys_start_time = now
-
-        # 2. Active escape maneuver execution window
-        if self.is_stuck and now < self.unstuck_until_time:
-            return True, self.unstuck_keys, self.unstuck_heading_deg
 
         # 3. Terrain patch displacement via sub-pixel phase correlation
         patch = norm[self.y1:self.y2, self.x1:self.x2]
@@ -100,7 +118,7 @@ class TerrainMotionTracker:
                 shift, resp = cv2.phaseCorrelate(self.prev_crop, crop)
                 disp = float(np.hypot(shift[0], shift[1]))
 
-                if resp >= 0.30:
+                if resp >= 0.25:
                     if disp < 2.0 and commanded_keys:
                         if self.stuck_start_time is None:
                             self.stuck_start_time = now
@@ -108,9 +126,8 @@ class TerrainMotionTracker:
                             self._trigger_escape(last_heading_deg, now)
                     else:
                         self.stuck_start_time = None
-                        if now >= self.unstuck_until_time:
-                            self.is_stuck = False
-                            self.escape_attempt = 0
+                        self.is_stuck = False
+                        self.escape_attempt = 0
 
             self.prev_crop = crop.copy()
             self.last_check_time = now
@@ -277,6 +294,7 @@ class SpatialNavigator:
         self,
         frame: np.ndarray,
         rift_direction_keys: list[str] | None = None,
+        rift_angle: float | None = None,
     ) -> SpatialNavResult:
         """Calculate the real-time AI steering vector from current frame."""
         h, w = frame.shape[:2]
@@ -307,11 +325,11 @@ class SpatialNavigator:
         elif rift_direction_keys:
             # Fallback to external IPC signal only if live vision was momentarily obscured
             active_rift_keys = rift_direction_keys
-            active_rift_angle = None
+            active_rift_angle = rift_angle
             active_rift_mode = "ipc_fallback"
             active_rift_pt = None
             self.last_known_rift_keys = list(active_rift_keys)
-            self.last_known_rift_angle = None
+            self.last_known_rift_angle = active_rift_angle
             self.last_rift_seen_time = now
         elif self.last_known_rift_keys and (now - self.last_rift_seen_time < self.rift_grace_period):
             # Heading Persistence Memory: retain rift direction for up to 1.5s during modal transitions or brief frame occlusions
@@ -511,6 +529,7 @@ class SpatialNavigator:
             last_heading_deg=angle_deg,
             commanded_keys=keys,
             now=now,
+            is_rift_mode=(mode == "rift_push"),
         )
 
         if is_stuck and unstuck_keys:

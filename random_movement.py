@@ -224,6 +224,7 @@ def movement_loop() -> None:
             # 2. Check for active rift navigation signal
             rift_info = read_rift_movement()
             rift_keys = rift_info[0] if rift_info else None
+            rift_angle = rift_info[1] if rift_info else None
             if rift_keys:
                 last_rift_time = time.monotonic()
 
@@ -231,8 +232,13 @@ def movement_loop() -> None:
             if SPATIAL_ENABLED and active_cap:
                 try:
                     frame = active_cap.grab_bgr()
-                    res: SpatialNavResult = spatial_nav.analyze(frame, rift_direction_keys=rift_keys)
+                    res: SpatialNavResult = spatial_nav.analyze(frame, rift_direction_keys=rift_keys, rift_angle=rift_angle)
                     target_keys = set(res.direction_keys)
+
+                    # Immediate key flush on rift push transition to guarantee no residual directional keys stick
+                    if (res.mode == "rift_push" and last_mode != "rift_push") or (last_mode == "rift_push" and res.mode != "rift_push"):
+                        release_all_keys()
+                        active_keys_held.clear()
 
                     if res.mode == "rift_push":
                         last_rift_time = time.monotonic()

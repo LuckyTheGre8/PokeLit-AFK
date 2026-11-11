@@ -293,11 +293,11 @@ class RiftDetector:
 
         scores: dict[str, float] = {}
 
-        # 0. Check overall screen black ratio: menus and modals have > 18% black void
+        # 0. Check overall screen black ratio: menus and modals have > 30% black void
         v_all = np.max(norm, axis=2)
         black_ratio = (v_all < 15).sum() / (target_w * target_h)
         scores["black_ratio"] = round(float(black_ratio), 4)
-        if black_ratio > 0.18:
+        if black_ratio > 0.30:
             return RiftResult(
                 is_active=False,
                 mode="none",
@@ -363,7 +363,14 @@ class RiftDetector:
             )
 
         # 1b. Floating Beacon Arrow above physical portal (pointing down into portal)
-        play = norm[60:625, :]
+        # Scan full-height playfield with only HUD overlays masked out
+        play_mask = np.ones((target_h, target_w), dtype=np.uint8) * 255
+        play_mask[:215, :315] = 0        # Top-left player stats/avatar card
+        play_mask[15:70, 420:605] = 0    # Top timer
+        play_mask[615:, :] = 0           # Bottom task banner
+        play = norm.copy()
+        play[play_mask == 0] = 0
+
         max_va = 0.0
         if self.tpl_arrow_above is not None and play.shape[0] >= self.tpl_arrow_above.shape[0] and play.shape[1] >= self.tpl_arrow_above.shape[1]:
             res_a = cv2.matchTemplate(play, self.tpl_arrow_above, cv2.TM_CCOEFF_NORMED)
@@ -373,7 +380,7 @@ class RiftDetector:
 
             if max_va >= 0.75:
                 aw, ah = self.tpl_arrow_above.shape[1], self.tpl_arrow_above.shape[0]
-                target_pt = (max_la[0] + aw // 2, min(target_h - 10, 60 + max_la[1] + ah // 2 + 50))
+                target_pt = (max_la[0] + aw // 2, min(target_h - 10, max_la[1] + ah // 2 + 50))
                 keys, angle = self._calc_direction(target_pt, target_w, target_h)
                 return RiftResult(
                     is_active=True,
@@ -395,7 +402,7 @@ class RiftDetector:
 
             if max_vp >= 0.75:
                 pw, ph = self.tpl_portal.shape[1], self.tpl_portal.shape[0]
-                target_pt = (max_lp[0] + pw // 2, 60 + max_lp[1] + ph // 2)
+                target_pt = (max_lp[0] + pw // 2, max_lp[1] + ph // 2)
                 keys, angle = self._calc_direction(target_pt, target_w, target_h)
                 return RiftResult(
                     is_active=True,
@@ -417,7 +424,7 @@ class RiftDetector:
 
             if max_vr >= 0.70:
                 tx = max_lr[0]
-                ty = 60 + max_lr[1]
+                ty = max_lr[1]
                 # Verify purple cluster in the vicinity (within 70-100px)
                 bx1 = max(0, tx - 70)
                 bx2 = min(target_w, tx + 100)

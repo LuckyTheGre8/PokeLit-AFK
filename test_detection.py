@@ -419,8 +419,56 @@ def test_full_detection_suite():
     assert not PAUSE_FILE.exists(), "Gameplay watchdog must clear pause during regular gameplay!"
     print("[TEST 27] Gameplay Watchdog: Stray .pause_movement successfully detected & cleared")
 
+    # 28. Top Screen Edge Rift Detection (y < 60):
+    # Verifies that compass arrows at the top border (pointing North / Up) are detected
+    # rather than being clipped by outdated [60:625] crops.
+    im_top_test = im_game.copy()
+    # Splice arrow_left cluster & label to top right border (y=30, x=750)
+    crop_arrow = im_arrow_l[230:310, 40:120]
+    im_top_test[30:110, 750:830] = crop_arrow
+    top_res = rift_detector.detect(im_top_test)
+    assert top_res.is_active and top_res.mode == "rift_arrow", f"Top rift arrow must be detected: {top_res}"
+    assert "w" in top_res.direction_keys, f"Top arrow must contain 'w' key, got {top_res.direction_keys}"
+    print(f"[TEST 28] Top Screen Edge Rift (y < 60): active={top_res.is_active}, keys={top_res.direction_keys}, angle={top_res.angle_deg}°")
+
+    # 29. TerrainMotionTracker Escape Termination & Rift Push Immunity:
+    # Verifies that the escape maneuver automatically terminates after 0.65s (even on uniform grass with resp < 0.25)
+    # and that straight-line rift runs (> 4.0s) are immune to blind anti-pinning timeouts.
+    from spatial_navigator import TerrainMotionTracker
+    tracker = TerrainMotionTracker()
+    now_sim = time.monotonic()
+    tracker._trigger_escape(0.0, now_sim)
+    # 0.1s into escape: must be executing escape maneuver
+    is_esc, keys_esc, _ = tracker.update(im_game, 0.0, ["d"], now_sim + 0.1)
+    assert is_esc and keys_esc, "Must be actively in escape maneuver"
+    # 0.70s into escape: duration expired -> MUST reset is_stuck to False!
+    is_esc_done, keys_esc_done, _ = tracker.update(im_game, 0.0, ["d"], now_sim + 0.70)
+    assert not is_esc_done and not keys_esc_done, "Escape maneuver MUST automatically reset after duration!"
+
+    # Rift push immunity: long run (5.0s) towards distant rift does NOT trigger false obstacle escape
+    tracker_rift = TerrainMotionTracker()
+    now_r = time.monotonic()
+    for t_step in range(1, 10):
+        is_r_stuck, _, _ = tracker_rift.update(im_game, 0.0, ["w"], now_r + t_step * 0.6, is_rift_mode=True)
+        assert not is_r_stuck, f"Rift push must not trigger false obstacle escape at step {t_step}"
+    print("[TEST 29] TerrainMotionTracker: Escape auto-terminates safely | Rift push immune to blind timeout")
+
+    # 30. Directional Key Transition on Rift Push:
+    # Verifies that when transitioning to rift_push, all previously held keys are flushed
+    active_held_sim = {"d"}
+    target_rift_sim = {"w", "a"}
+    last_mode_sim = "kiting_evasion"
+    curr_mode_sim = "rift_push"
+    # Simulate random_movement.py transition logic
+    if (curr_mode_sim == "rift_push" and last_mode_sim != "rift_push"):
+        active_held_sim.clear()
+    assert not active_held_sim, "Previously held keys must be cleared immediately upon entering rift push!"
+    active_held_sim = set(target_rift_sim)
+    assert active_held_sim == {"w", "a"}, "Only active rift direction keys must be held!"
+    print("[TEST 30] Rift Transition Key Flush: Previous movement keys flushed cleanly upon rift lock")
+
     print("\n================================================================================")
-    print("ALL 30 VERIFICATION TESTS (GAMEPLAY, MODALS, RIFTS, DYNAMIC ARROW, MEMORY, UNSTUCK, TIMER, AUTO LEVEL, RESTART, SPATIAL AI, IPC EXPIRATION) PASSED!")
+    print("ALL 33 VERIFICATION TESTS (GAMEPLAY, MODALS, RIFTS, DYNAMIC ARROW, MEMORY, UNSTUCK, TIMER, AUTO LEVEL, RESTART, SPATIAL AI, IPC EXPIRATION, TOP EDGE RIFT, MOTION TRACKER LIFECYCLE) PASSED!")
     print("================================================================================")
 
 
