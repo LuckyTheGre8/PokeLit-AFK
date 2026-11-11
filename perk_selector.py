@@ -63,7 +63,7 @@ from window_stream import WindowCapture, WindowInput, find_target_window
 pyautogui.FAILSAFE = True
 pyautogui.PAUSE = 0.0
 
-user32 = ctypes.windll.user32
+user32 = getattr(ctypes, "windll", None).user32 if hasattr(ctypes, "windll") else None
 
 PAUSE_FILE = Path(__file__).resolve().parent / ".pause_movement"
 RIFT_FILE = Path(__file__).resolve().parent / ".rift_movement"

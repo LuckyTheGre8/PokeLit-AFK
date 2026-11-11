@@ -1,0 +1,23 @@
+# PokéLit Bot - Core Python Dependencies
+# Compatible with Windows, Linux (CachyOS / Arch / Ubuntu), and macOS
+
+# Computer Vision & Template Matching
+opencv-python>=4.8.0.76
+
+# Numerical Processing & Potential Field Vectors
+numpy>=1.24.0
+
+# Multi-Platform Ultra-Fast Screen Capture
+mss>=9.0.0
+
+# Image Processing (Pillow backend for PyAutoGUI and vision utilities)
+Pillow>=10.0.0
+
+# Mouse & Keystroke Automation
+PyAutoGUI>=0.9.54
+
+# Global Hotkey Listener ([F8], [F9], [F10], [F7]) & Input Control
+pynput>=1.7.6
+
+# Linux-specific X11 interface for PyAutoGUI & pynput (ignored on Windows)
+python-xlib>=0.33; sys_platform == 'linux'

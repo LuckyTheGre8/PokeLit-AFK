@@ -15,17 +15,22 @@ import time
 from typing import Optional
 import numpy as np
 
-# Ensure Windows DPI awareness so all Win32 APIs, GetClientRect, ClientToScreen, and PyAutoGUI use physical pixels
-try:
-    ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
-except Exception:
-    try:
-        ctypes.windll.user32.SetProcessDPIAware()
-    except Exception:
-        pass
+IS_WINDOWS = hasattr(ctypes, "windll")
 
-user32 = ctypes.windll.user32
-gdi32 = ctypes.windll.gdi32
+# Ensure Windows DPI awareness so all Win32 APIs, GetClientRect, ClientToScreen, and PyAutoGUI use physical pixels
+if IS_WINDOWS:
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # PROCESS_PER_MONITOR_DPI_AWARE
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+    user32 = getattr(ctypes.windll, "user32", None)
+    gdi32 = getattr(ctypes.windll, "gdi32", None)
+else:
+    user32 = None
+    gdi32 = None
 
 # Win32 Constants
 WM_KEYDOWN = 0x0100
@@ -53,6 +58,8 @@ VK_CODES = {
 
 def attach_desktop() -> None:
     """Ensure thread is attached to interactive desktop 'Default'."""
+    if not IS_WINDOWS or user32 is None:
+        return
     try:
         hdesk = user32.OpenDesktopW("Default", 0, False, 0x01FF)
         if hdesk:
@@ -79,6 +86,8 @@ class BITMAPINFOHEADER(ctypes.Structure):
 
 def find_target_window(keyword: str = "pokelit") -> Optional[int]:
     """Find the HWND of the PokéLit game window, filtering out IDEs and editors."""
+    if not IS_WINDOWS or user32 is None:
+        return None
     attach_desktop()
     candidates: list[tuple[int, str]] = []
 
