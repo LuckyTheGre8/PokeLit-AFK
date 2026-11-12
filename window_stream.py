@@ -49,6 +49,8 @@ VK_CODES = {
     "1": 0x31,
     "2": 0x32,
     "3": 0x33,
+    "4": 0x34,
+    "5": 0x35,
     "r": 0x52,
     "space": 0x20,
     "enter": 0x0D,
@@ -237,12 +239,9 @@ class WindowInput:
         return pt.x, pt.y
 
     def click(self, client_x: int, client_y: int) -> None:
-        """Send WM_LBUTTONDOWN and WM_LBUTTONUP directly to target window at client coordinates."""
+        """Send WM_LBUTTONDOWN and WM_LBUTTONUP directly to target window at client coordinates (single click)."""
+        dest_hwnd = self.target_hwnd or self.hwnd
         lparam = (int(client_y) << 16) | (int(client_x) & 0xFFFF)
-        user32.PostMessageW(self.target_hwnd, WM_LBUTTONDOWN, 0x0001, lparam)
+        user32.PostMessageW(dest_hwnd, WM_LBUTTONDOWN, 0x0001, lparam)
         time.sleep(0.06)
-        user32.PostMessageW(self.target_hwnd, WM_LBUTTONUP, 0x0000, lparam)
-        if self.target_hwnd != self.hwnd:
-            user32.PostMessageW(self.hwnd, WM_LBUTTONDOWN, 0x0001, lparam)
-            time.sleep(0.06)
-            user32.PostMessageW(self.hwnd, WM_LBUTTONUP, 0x0000, lparam)
+        user32.PostMessageW(dest_hwnd, WM_LBUTTONUP, 0x0000, lparam)

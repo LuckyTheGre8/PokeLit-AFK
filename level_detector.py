@@ -53,6 +53,7 @@ class ModalType(str, Enum):
     NONE = "none"
     LEVEL_UP = "level_up"
     ITEM = "item"
+    KECLEON_SHOP = "kecleon_shop"
 
 
 class MenuScreenType(str, Enum):
@@ -154,6 +155,10 @@ class LevelUpDetector:
         self.tpl_dont_equip = self._load_template("dont_equip.png")
         self.tpl_lock_word = self._load_template("lock_word.png")
 
+        # Kecleon Shop templates
+        self.tpl_kecleon_title = self._load_template("kecleon_shop_title.png")
+        self.tpl_leave_btn = self._load_template("leave_btn.png")
+
         # Multi-scale ratios to handle browser scaling / zoom levels
         self.scales = [0.90, 1.0, 1.10]
 
@@ -248,6 +253,25 @@ class LevelUpDetector:
                 modal_type=ModalType.ITEM,
                 recommended_choice=recommended_choice,
                 option_count=opt_count,
+                scores=scores,
+            )
+
+        # 3. Check Kecleon Shop Modal
+        score_kecleon, _ = self._match_best_scale(roi, self.tpl_kecleon_title)
+        score_leave, _ = self._match_best_scale(roi, self.tpl_leave_btn)
+        scores["kecleon_title"] = score_kecleon
+        scores["leave_btn"] = score_leave
+
+        is_kecleon = (score_kecleon >= 0.70) or (score_leave >= 0.72)
+
+        if is_kecleon:
+            conf = max(score_kecleon, score_leave)
+            return DetectionResult(
+                is_level_up=True,
+                confidence=round(conf, 4),
+                modal_type=ModalType.KECLEON_SHOP,
+                recommended_choice="4",
+                option_count=1,
                 scores=scores,
             )
 
@@ -884,22 +908,22 @@ class MenuNavigatorDetector:
                     click_pt = (360 + loc_pl[0] + self.tpl_play.shape[1] // 2, 400 + loc_pl[1] + self.tpl_play.shape[0] // 2)
                     return MenuDetectionResult(screen_type=MenuScreenType.MAIN_MENU, click_point=click_pt, confidence=round(val_pl, 4))
 
-        # 4. Stray Sub-Menu / Modal Dialog (Gacha menu, Upgrades, etc.) -> Click "Back"
+        # 4. Stray Sub-Menu / Modal Dialog (Gacha menu, Mega page, Upgrades, etc.) -> Click "Back"
         if self.tpl_modal_back is not None:
-            roi_mb = norm[140:220, 700:850]
+            roi_mb = norm[70:260, 650:900]
             if roi_mb.shape[0] >= self.tpl_modal_back.shape[0] and roi_mb.shape[1] >= self.tpl_modal_back.shape[1]:
                 res_mb = cv2.matchTemplate(roi_mb, self.tpl_modal_back, cv2.TM_CCOEFF_NORMED)
                 val_mb = float(cv2.minMaxLoc(res_mb)[1])
-                if val_mb >= 0.75:
+                if val_mb >= 0.68:
                     loc_mb = cv2.minMaxLoc(res_mb)[3]
-                    click_pt = (700 + loc_mb[0] + self.tpl_modal_back.shape[1] // 2, 140 + loc_mb[1] + self.tpl_modal_back.shape[0] // 2)
+                    click_pt = (650 + loc_mb[0] + self.tpl_modal_back.shape[1] // 2, 70 + loc_mb[1] + self.tpl_modal_back.shape[0] // 2)
                     return MenuDetectionResult(screen_type=MenuScreenType.SUBMENU_BACK, click_point=click_pt, confidence=round(val_mb, 4))
 
         return MenuDetectionResult(screen_type=MenuScreenType.NONE, confidence=0.0)
 
 
 class PerkSelector:
-    """Handles option choices for Level-Up (1,2,3), Item 2-opt (select 2), and Item 3-opt (select 3)."""
+    """Handles option choices for Level-Up (1,2,3), Item 2-opt (select 2), Item 3-opt (select 3), and Kecleon Shop (exit 4)."""
 
     def __init__(
         self,
@@ -908,6 +932,7 @@ class PerkSelector:
         priority_list: list[str] | None = None,
         item_choice_2: str = "2",
         item_choice_3: str = "3",
+        kecleon_choice: str = "4",
     ) -> None:
         from pynput import keyboard
         import pyautogui
@@ -917,12 +942,15 @@ class PerkSelector:
         self.priority_list = priority_list or []
         self.item_choice_2 = item_choice_2
         self.item_choice_3 = item_choice_3
+        self.kecleon_choice = kecleon_choice
         self.cycle_index = 0
         self.kb = keyboard.Controller()
         self.pyautogui = pyautogui
 
     def decide_choice(self, modal_type: ModalType = ModalType.LEVEL_UP, option_count: int = 3) -> str:
         """Determine key to press based on modal type and option count."""
+        if modal_type == ModalType.KECLEON_SHOP:
+            return self.kecleon_choice
         if modal_type == ModalType.ITEM:
             if option_count == 3:
                 return self.item_choice_3
@@ -942,8 +970,8 @@ class PerkSelector:
         return "1"
 
     def tap_choice(self, key_str: str) -> None:
-        """Reliably press and release key 1, 2, or 3."""
-        if key_str not in ("1", "2", "3"):
+        """Reliably press and release key 1, 2, 3, 4, or 5."""
+        if key_str not in ("1", "2", "3", "4", "5"):
             key_str = "1"
 
         self.kb.press(key_str)

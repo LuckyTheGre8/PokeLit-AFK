@@ -26,6 +26,9 @@
     "choice_2_options": "2",
     "choice_3_options": "3"
   },
+  "kecleon_shop": {
+    "exit_key": "4"
+  },
   "rift_navigation": {
     "enabled": true,
     "confidence_threshold": 0.65
@@ -36,8 +39,10 @@
   "auto_restart": {
     "enabled": true,
     "region": "hoenn",
-    "post_click_delay_seconds": 2.5,
-    "run_over_cooldown_seconds": 5.0
+    "delay_between_clicks_seconds": 3.0,
+    "pre_click_settle_seconds": 1.2,
+    "post_click_delay_seconds": 3.0,
+    "run_over_cooldown_seconds": 6.0
   },
   "spatial_ai": {
     "enabled": true,

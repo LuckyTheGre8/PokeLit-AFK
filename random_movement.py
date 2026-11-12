@@ -240,7 +240,7 @@ def movement_loop() -> None:
                         release_all_keys()
                         active_keys_held.clear()
 
-                    if res.mode == "rift_push":
+                    if res.mode == "rift_push" or (res.mode == "unstuck_escape" and getattr(spatial_nav, "last_known_rift_keys", None)):
                         last_rift_time = time.monotonic()
 
                     now = time.monotonic()

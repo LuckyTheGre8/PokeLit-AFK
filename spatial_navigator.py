@@ -57,6 +57,7 @@ class TerrainMotionTracker:
         self.escape_attempt: int = 0
         self.last_commanded_keys: list[str] = []
         self.same_keys_start_time: float = 0.0
+        self.motion_detected: bool = False
 
     def reset(self) -> None:
         self.prev_crop = None
@@ -68,6 +69,7 @@ class TerrainMotionTracker:
         self.escape_attempt = 0
         self.same_keys_start_time = 0.0
         self.last_commanded_keys = []
+        self.motion_detected = False
 
     def update(
         self,
@@ -78,21 +80,11 @@ class TerrainMotionTracker:
         is_rift_mode: bool = False,
     ) -> tuple[bool, list[str], float]:
         """Detect if character is pinned against an obstacle or wall."""
-        if is_rift_mode:
-            # During active rift push, preserve direct pathing to rift without false obstacle interruptions
-            self.is_stuck = False
-            self.unstuck_keys = []
-            self.escape_attempt = 0
-            self.stuck_start_time = None
-            self.same_keys_start_time = now
-            return False, [], 0.0
-
         # 1. Active escape maneuver execution window:
         # Once the 0.65s escape maneuver finishes, immediately reset is_stuck to False so bot NEVER stays trapped!
         if self.is_stuck and now >= self.unstuck_until_time:
             self.is_stuck = False
             self.unstuck_keys = []
-            self.escape_attempt = 0
             self.stuck_start_time = None
             self.same_keys_start_time = now
 
@@ -100,11 +92,12 @@ class TerrainMotionTracker:
             return True, self.unstuck_keys, self.unstuck_heading_deg
 
         # 2. Anti-pinning timeout: same direction held continuously without change
+        # Straight-line runs towards distant rifts (> 4.0s) are immune to blind timeouts
         if commanded_keys == self.last_commanded_keys and commanded_keys:
             if self.same_keys_start_time == 0.0:
                 self.same_keys_start_time = now
-            elif (now - self.same_keys_start_time >= 4.0) and not self.is_stuck:
-                self._trigger_escape(last_heading_deg, now)
+            elif (now - self.same_keys_start_time >= 4.0) and not self.is_stuck and not is_rift_mode:
+                self._trigger_escape(last_heading_deg, now, is_rift_mode=False)
         else:
             self.last_commanded_keys = list(commanded_keys)
             self.same_keys_start_time = now
@@ -119,11 +112,22 @@ class TerrainMotionTracker:
                 disp = float(np.hypot(shift[0], shift[1]))
 
                 if resp >= 0.25:
-                    if disp < 2.0 and commanded_keys:
-                        if self.stuck_start_time is None:
-                            self.stuck_start_time = now
-                        elif now - self.stuck_start_time >= 0.65:
-                            self._trigger_escape(last_heading_deg, now)
+                    if disp >= 2.0:
+                        self.motion_detected = True
+                        self.stuck_start_time = None
+                        self.is_stuck = False
+                        self.escape_attempt = 0
+                    elif commanded_keys:
+                        # Physical obstacle collision pinning detection:
+                        # In normal mode, triggers when disp < 2.0 for >= 0.65s.
+                        # In rift mode, triggers once motion has been detected (motion_detected=True)
+                        # and then halted against an obstacle (disp < 2.0 for >= 0.65s).
+                        can_trigger = (not is_rift_mode) or self.motion_detected
+                        if can_trigger:
+                            if self.stuck_start_time is None:
+                                self.stuck_start_time = now
+                            elif now - self.stuck_start_time >= 0.65:
+                                self._trigger_escape(last_heading_deg, now, is_rift_mode=is_rift_mode)
                     else:
                         self.stuck_start_time = None
                         self.is_stuck = False
@@ -134,16 +138,30 @@ class TerrainMotionTracker:
 
         return self.is_stuck, self.unstuck_keys, self.unstuck_heading_deg
 
-    def _trigger_escape(self, last_heading_deg: float, now: float) -> None:
+    def _trigger_escape(self, last_heading_deg: float, now: float, is_rift_mode: bool = False) -> None:
         self.is_stuck = True
         self.unstuck_until_time = now + 0.65
-        # Cycle through perpendicular slides: +90° right, -90° left, +135° reverse-angle
-        if self.escape_attempt % 3 == 0:
-            esc_deg = (last_heading_deg + 90.0) % 360.0
-        elif self.escape_attempt % 3 == 1:
-            esc_deg = (last_heading_deg - 90.0) % 360.0
+        if is_rift_mode:
+            # During rift push: execute tangential obstacle bypass to maintain forward progress toward the rift!
+            # +60° right-tangent, -60° left-tangent, followed by +120° / -120° for deep concave corners
+            slot = self.escape_attempt % 4
+            if slot == 0:
+                esc_deg = (last_heading_deg + 60.0) % 360.0
+            elif slot == 1:
+                esc_deg = (last_heading_deg - 60.0) % 360.0
+            elif slot == 2:
+                esc_deg = (last_heading_deg + 120.0) % 360.0
+            else:
+                esc_deg = (last_heading_deg - 120.0) % 360.0
         else:
-            esc_deg = (last_heading_deg + 135.0) % 360.0
+            # Normal mode: cycle through perpendicular slides: +90° right, -90° left, +135° reverse-angle
+            if self.escape_attempt % 3 == 0:
+                esc_deg = (last_heading_deg + 90.0) % 360.0
+            elif self.escape_attempt % 3 == 1:
+                esc_deg = (last_heading_deg - 90.0) % 360.0
+            else:
+                esc_deg = (last_heading_deg + 135.0) % 360.0
+
         if esc_deg > 180.0:
             esc_deg -= 360.0
         self.unstuck_heading_deg = round(esc_deg, 1)
@@ -536,6 +554,9 @@ class SpatialNavigator:
             mode = "unstuck_escape"
             keys = unstuck_keys
             angle_deg = unstuck_angle
+            # Refresh rift memory during obstacle bypass slide so rift is NEVER lost while unstucking!
+            if self.last_known_rift_keys:
+                self.last_rift_seen_time = now
 
         return SpatialNavResult(
             direction_keys=keys,

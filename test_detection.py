@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import cv2
+import numpy as np
 from level_detector import (
     AutoLevelDetector,
     AutoVigorDetector,
@@ -41,6 +42,7 @@ IMG_RUN_OVER = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463
 IMG_RUN_OVER_TALL = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794305258597_e5a7ab40.png")
 IMG_CHOOSE_REGION = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794254326963_916ca9c5.jpg")
 IMG_MAIN_MENU = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794254326996_f5d1b329.jpg")
+IMG_KECLEON = Path(r"C:/Users/lucky/.gemini/antigravity/brain/4afac521-6aeb-42ab-a2ca-d5e2e53665b3/.user_uploaded/media_1794499814321_06653558.jpg")
 
 
 def test_full_detection_suite():
@@ -468,6 +470,33 @@ def test_full_detection_suite():
         assert not is_r_stuck, f"Rift push must not trigger false obstacle escape at step {t_step}"
     print("[TEST 29] TerrainMotionTracker: Escape auto-terminates safely | Rift push immune to blind timeout")
 
+    # 29b. TerrainMotionTracker Active Rift Obstacle Pinning & Tangential Bypass:
+    # Verifies that when character is running towards a rift and is blocked by an obstacle/wall (disp < 2.0 while commanding keys),
+    # the tracker detects the physical block within 0.65s and executes a smart +60° tangential bypass slide!
+    tracker_rift_obs = TerrainMotionTracker()
+    t0_obs = time.monotonic()
+    # Step 1: Character moves towards rift across terrain (heading 0.0°, keys ['d'])
+    tracker_rift_obs.update(im_game, 0.0, ["d"], t0_obs, is_rift_mode=True)
+    im_shifted = np.roll(im_game, 6, axis=1)
+    tracker_rift_obs.update(im_shifted, 0.0, ["d"], t0_obs + 0.25, is_rift_mode=True)
+    assert tracker_rift_obs.motion_detected, "Terrain motion must be recognized in rift mode"
+
+    # Step 2: Character hits an obstacle (disp == 0.0 while commanding keys)
+    # Check at +0.50s (0.25s pinned - must not trigger prematurely)
+    is_obs_early, _, _ = tracker_rift_obs.update(im_shifted, 0.0, ["d"], t0_obs + 0.50, is_rift_mode=True)
+    assert not is_obs_early, "Must not trigger before 0.65s pinning threshold"
+
+    # Check at +1.20s (0.70s pinned -> threshold exceeded -> fires tangential bypass!)
+    is_obs_stuck, obs_keys, obs_angle = tracker_rift_obs.update(im_shifted, 0.0, ["d"], t0_obs + 1.20, is_rift_mode=True)
+    assert is_obs_stuck, "Obstacle collision during rift push MUST trigger unstuck escape!"
+    assert obs_angle == 60.0, f"Rift escape must slide tangentially at +60.0°, got {obs_angle}°"
+    assert obs_keys == ["s", "d"], f"Expected ['s', 'd'] for +60°, got {obs_keys}"
+
+    # Step 3: Escape maneuver expires after 0.65s and seamlessly resumes rift tracking
+    is_obs_done, obs_keys_done, _ = tracker_rift_obs.update(im_shifted, 0.0, ["d"], t0_obs + 1.90, is_rift_mode=True)
+    assert not is_obs_done and not obs_keys_done, "Rift escape maneuver must auto-reset after 0.65s"
+    print("[TEST 29b] TerrainMotionTracker: Active rift obstacle pinning detected -> tangential bypass slide (+60.0°) verified!")
+
     # 30. Directional Key Transition on Rift Push:
     # Verifies that when transitioning to rift_push, all previously held keys are flushed
     active_held_sim = {"d"}
@@ -482,8 +511,39 @@ def test_full_detection_suite():
     assert active_held_sim == {"w", "a"}, "Only active rift direction keys must be held!"
     print("[TEST 30] Rift Transition Key Flush: Previous movement keys flushed cleanly upon rift lock")
 
+    # 31. End-of-Run Menu Click Throttling & Anti-Double-Click Verification:
+    # Verifies that delay_between_clicks (>= 3.0s), pre_click_settle (>= 1.0s), and cooldowns are properly configured,
+    # and that the widened sub-menu back ROI successfully detects and recovers from stray modals (e.g. Mega page)
+    import json
+    with open("config.json", "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+    ar_cfg = cfg.get("auto_restart", {})
+    delay_between = ar_cfg.get("delay_between_clicks_seconds", 0.0)
+    settle_time = ar_cfg.get("pre_click_settle_seconds", 0.0)
+    ro_cooldown = ar_cfg.get("run_over_cooldown_seconds", 0.0)
+    assert delay_between >= 3.0, f"Expected delay_between_clicks_seconds >= 3.0s, got {delay_between}"
+    assert settle_time >= 1.0, f"Expected pre_click_settle_seconds >= 1.0s, got {settle_time}"
+    assert ro_cooldown >= 5.0, f"Expected run_over_cooldown_seconds >= 5.0s, got {ro_cooldown}"
+
+    # Verify widened Submenu Back ROI on stray modal
+    m_back_check = menu_det.detect(im_gacha_mock)
+    assert m_back_check.screen_type == MenuScreenType.SUBMENU_BACK, "Widened ROI must detect Back button on modals"
+    print(f"[TEST 31] End-of-Run Throttling: delay={delay_between}s, settle={settle_time}s, cooldown={ro_cooldown}s | Modal Recovery verified")
+
+    # 32. Kecleon's Shop Modal Detection & Exit [4] Verification:
+    # Verifies that when Kecleon's shop appears, it is detected as ModalType.KECLEON_SHOP
+    # and automatically selects choice '4' to exit the shop.
+    im_kecleon = cv2.imread(str(IMG_KECLEON))
+    res_kecleon = detector.detect(im_kecleon)
+    print(f"[TEST 32] Kecleon Shop: is_modal={res_kecleon.is_level_up}, type={res_kecleon.modal_type.value}, choice={res_kecleon.recommended_choice}, conf={res_kecleon.confidence}")
+    assert res_kecleon.is_level_up, "Kecleon shop must be detected as an active modal!"
+    assert res_kecleon.modal_type == ModalType.KECLEON_SHOP, f"Expected KECLEON_SHOP, got {res_kecleon.modal_type}"
+    assert res_kecleon.recommended_choice == "4", f"Expected recommended choice '4', got {res_kecleon.recommended_choice}"
+    k_choice = selector.decide_choice(res_kecleon.modal_type, res_kecleon.option_count)
+    assert k_choice == "4", f"PerkSelector must choose '4' for Kecleon shop, got {k_choice}"
+
     print("\n================================================================================")
-    print("ALL 33 VERIFICATION TESTS (GAMEPLAY, MODALS, RIFTS, DYNAMIC ARROW, MEMORY, UNSTUCK, TIMER, AUTO LEVEL, RESTART, SPATIAL AI, IPC EXPIRATION, TOP EDGE RIFT, MOTION TRACKER LIFECYCLE) PASSED!")
+    print("ALL 36 VERIFICATION TESTS (GAMEPLAY, MODALS, RIFTS, DYNAMIC ARROW, MEMORY, UNSTUCK, TIMER, AUTO LEVEL, RESTART, SPATIAL AI, IPC EXPIRATION, TOP EDGE RIFT, MOTION TRACKER LIFECYCLE, RIFT OBSTACLE BYPASS, MENU CLICK THROTTLING, KECLEON SHOP EXIT 4) PASSED!")
     print("================================================================================")
 
 

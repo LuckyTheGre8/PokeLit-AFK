@@ -142,6 +142,9 @@ ITEM_CFG = CONFIG.get("item_window", {})
 ITEM_CHOICE_2 = ITEM_CFG.get("choice_2_options", "2")
 ITEM_CHOICE_3 = ITEM_CFG.get("choice_3_options", "3")
 
+KECLEON_CFG = CONFIG.get("kecleon_shop", {})
+KECLEON_EXIT_KEY = str(KECLEON_CFG.get("exit_key", "4"))
+
 RIFT_CFG = CONFIG.get("rift_navigation", {})
 RIFT_ENABLED = RIFT_CFG.get("enabled", True)
 
@@ -155,8 +158,9 @@ if AR_REGION in ("jhoto", "johto"):
     AR_REGION = "johto"
 elif AR_REGION in ("hoenn", "hoen"):
     AR_REGION = "hoenn"
-AR_DELAY = float(AR_CFG.get("post_click_delay_seconds", 2.5))
-AR_RO_COOLDOWN = float(AR_CFG.get("run_over_cooldown_seconds", 5.0))
+AR_DELAY = float(AR_CFG.get("delay_between_clicks_seconds", AR_CFG.get("post_click_delay_seconds", 3.0)))
+AR_PRE_CLICK_SETTLE = float(AR_CFG.get("pre_click_settle_seconds", 1.2))
+AR_RO_COOLDOWN = float(AR_CFG.get("run_over_cooldown_seconds", 6.0))
 
 running = threading.Event()
 shutdown = threading.Event()
@@ -181,6 +185,7 @@ selector = PerkSelector(
     priority_list=PRIORITY_LIST,
     item_choice_2=ITEM_CHOICE_2,
     item_choice_3=ITEM_CHOICE_3,
+    kecleon_choice=KECLEON_EXIT_KEY,
 )
 
 active_cap: WindowCapture | ScreenGrabber | None = None
@@ -280,9 +285,7 @@ def execute_click(norm_x: int, norm_y: int) -> None:
                 pyautogui.mouseDown(screen_x, screen_y, button="left")
                 time.sleep(0.08)
                 pyautogui.mouseUp(screen_x, screen_y, button="left")
-                # Win32 PostMessage backup
-                active_win_input.click(client_x, client_y)
-                time.sleep(0.08)
+                time.sleep(0.05)
             finally:
                 if prev_fg and prev_fg != active_hwnd:
                     user32.SetForegroundWindow(prev_fg)
@@ -326,6 +329,7 @@ def monitor_loop() -> None:
     last_run_over_click_time = 0.0
     last_play_click_time = 0.0
     last_submenu_back_time = 0.0
+    last_menu_click_time = 0.0
     global auto_level_confirmed_on, auto_vigor_active
     auto_level_confirmed_on = False
     auto_vigor_active = False
@@ -347,18 +351,32 @@ def monitor_loop() -> None:
                         set_pause(True)
                         set_rift_movement(False)
 
+                        now_menu = time.monotonic()
+                        # Universal delay throttle: strictly enforce delay between ANY consecutive menu clicks
+                        if now_menu - last_menu_click_time < AR_DELAY:
+                            time.sleep(0.25)
+                            continue
+
                         if menu_res.screen_type == MenuScreenType.RUN_OVER:
-                            now_ro = time.monotonic()
-                            # Generous cooldown: at least AR_RO_COOLDOWN (5.0s) between consecutive clicks
-                            if now_ro - last_run_over_click_time < AR_RO_COOLDOWN:
+                            if (now_menu - last_run_over_click_time < AR_RO_COOLDOWN):
                                 time.sleep(0.3)
                                 continue
-                            last_run_over_click_time = now_ro
 
                             print(f"\n==================================================")
                             print(f" [RUN OVER DETECTED] Match has ended!")
-                            print(f" -> Clicking 'Back to menu' button at {menu_res.click_point}...")
-                            execute_click(menu_res.click_point[0], menu_res.click_point[1])
+                            print(f" -> Stabilizing for {AR_PRE_CLICK_SETTLE:.1f}s before clicking 'Back to menu'...")
+                            time.sleep(AR_PRE_CLICK_SETTLE)
+
+                            # Re-verify on fresh frame after settle animation completes
+                            fresh_frame = active_cap.grab_bgr()
+                            fresh_menu = menu_detector.detect(fresh_frame)
+                            click_pt = fresh_menu.click_point if (fresh_menu.screen_type == MenuScreenType.RUN_OVER and fresh_menu.click_point) else menu_res.click_point
+
+                            print(f" -> Clicking 'Back to menu' button at {click_pt} (single precise click)...")
+                            execute_click(click_pt[0], click_pt[1])
+                            now_after = time.monotonic()
+                            last_run_over_click_time = now_after
+                            last_menu_click_time = now_after
 
                             # Wait patiently for 'Run over' screen to dismiss and transition to Main Menu
                             print(f" -> Waiting for 'Run over' screen to dismiss and Main Menu to load...")
@@ -371,21 +389,32 @@ def monitor_loop() -> None:
                                     break
 
                             # Extra delay after transition to let the Main Menu fully settle
-                            time.sleep(max(2.5, AR_DELAY))
+                            settle_delay = max(3.0, AR_DELAY)
+                            print(f" -> Waiting {settle_delay:.1f}s for Main Menu to completely settle...")
+                            time.sleep(settle_delay)
+                            last_menu_click_time = time.monotonic()
                             print("==================================================\n")
                             continue
 
                         elif menu_res.screen_type == MenuScreenType.MAIN_MENU:
-                            now_pl = time.monotonic()
-                            if now_pl - last_play_click_time < 3.0:
+                            if (now_menu - last_play_click_time < 3.5):
                                 time.sleep(0.3)
                                 continue
-                            last_play_click_time = now_pl
 
                             print(f"\n==================================================")
                             print(f" [MAIN MENU DETECTED]")
-                            print(f" -> Clicking 'Play' (Enter dungeon) at {menu_res.click_point}...")
-                            execute_click(menu_res.click_point[0], menu_res.click_point[1])
+                            print(f" -> Stabilizing 0.5s before clicking 'Play'...")
+                            time.sleep(0.5)
+
+                            fresh_frame = active_cap.grab_bgr()
+                            fresh_menu = menu_detector.detect(fresh_frame)
+                            click_pt = fresh_menu.click_point if (fresh_menu.screen_type == MenuScreenType.MAIN_MENU and fresh_menu.click_point) else menu_res.click_point
+
+                            print(f" -> Clicking 'Play' (Enter dungeon) at {click_pt}...")
+                            execute_click(click_pt[0], click_pt[1])
+                            now_after = time.monotonic()
+                            last_play_click_time = now_after
+                            last_menu_click_time = now_after
                             time.sleep(AR_DELAY)
                             print("==================================================\n")
                             continue
@@ -393,10 +422,18 @@ def monitor_loop() -> None:
                         elif menu_res.screen_type == MenuScreenType.CHOOSE_REGION:
                             print(f"\n==================================================")
                             print(f" [CHOOSE REGION DETECTED]")
-                            print(f" -> Selecting '{AR_REGION.capitalize()}' region at {menu_res.click_point}...")
-                            execute_click(menu_res.click_point[0], menu_res.click_point[1])
-                            print(f" -> Starting new match in {AR_REGION.capitalize()} (waiting 2.5s)...")
-                            time.sleep(2.5)
+                            print(f" -> Stabilizing 0.5s before selecting region...")
+                            time.sleep(0.5)
+
+                            fresh_frame = active_cap.grab_bgr()
+                            fresh_menu = menu_detector.detect(fresh_frame)
+                            click_pt = fresh_menu.click_point if (fresh_menu.screen_type == MenuScreenType.CHOOSE_REGION and fresh_menu.click_point) else menu_res.click_point
+
+                            print(f" -> Selecting '{AR_REGION.capitalize()}' region at {click_pt}...")
+                            execute_click(click_pt[0], click_pt[1])
+                            last_menu_click_time = time.monotonic()
+                            print(f" -> Starting new match in {AR_REGION.capitalize()} (waiting 3.0s)...")
+                            time.sleep(3.0)
 
                             # Reset match start time and Auto Level flag for the fresh game
                             match_start_time = time.monotonic()
@@ -409,17 +446,25 @@ def monitor_loop() -> None:
                             continue
 
                         elif menu_res.screen_type == MenuScreenType.SUBMENU_BACK:
-                            now_sb = time.monotonic()
-                            if now_sb - last_submenu_back_time < 2.5:
+                            if (now_menu - last_submenu_back_time < 3.0):
                                 time.sleep(0.3)
                                 continue
-                            last_submenu_back_time = now_sb
 
                             print(f"\n==================================================")
-                            print(f" [SUB-MENU / GACHA MODAL DETECTED]")
-                            print(f" -> Clicking 'Back' button at {menu_res.click_point} to return to Main Menu...")
-                            execute_click(menu_res.click_point[0], menu_res.click_point[1])
-                            time.sleep(2.0)
+                            print(f" [SUB-MENU / MODAL DETECTED]")
+                            print(f" -> Stabilizing 0.5s before clicking 'Back'...")
+                            time.sleep(0.5)
+
+                            fresh_frame = active_cap.grab_bgr()
+                            fresh_menu = menu_detector.detect(fresh_frame)
+                            click_pt = fresh_menu.click_point if (fresh_menu.screen_type == MenuScreenType.SUBMENU_BACK and fresh_menu.click_point) else menu_res.click_point
+
+                            print(f" -> Clicking 'Back' button at {click_pt} to return to Main Menu...")
+                            execute_click(click_pt[0], click_pt[1])
+                            now_after = time.monotonic()
+                            last_submenu_back_time = now_after
+                            last_menu_click_time = now_after
+                            time.sleep(AR_DELAY)
                             print("==================================================\n")
                             continue
 
@@ -440,7 +485,13 @@ def monitor_loop() -> None:
                     set_pause(True)
                     try:
                         modals_handled += 1
-                        modal_label = "LEVEL-UP" if result.modal_type == ModalType.LEVEL_UP else "ITEM WINDOW"
+                        if result.modal_type == ModalType.KECLEON_SHOP:
+                            modal_label = "KECLEON SHOP"
+                        elif result.modal_type == ModalType.LEVEL_UP:
+                            modal_label = "LEVEL-UP"
+                        else:
+                            modal_label = "ITEM WINDOW"
+
                         print(f"\n==================================================")
                         print(f" [{modal_label} DETECTED #{modals_handled}]")
                         print(f" Type: {result.modal_type.value} | Options: {result.option_count} | Confidence: {result.confidence:.3f}")
@@ -449,7 +500,9 @@ def monitor_loop() -> None:
                         time.sleep(SETTLE_SEC)
 
                         choice = selector.decide_choice(result.modal_type, result.option_count)
-                        if result.modal_type == ModalType.ITEM:
+                        if result.modal_type == ModalType.KECLEON_SHOP:
+                            action_desc = f"Kecleon Shop -> Exiting shop by tapping [{choice}]"
+                        elif result.modal_type == ModalType.ITEM:
                             action_desc = f"Item Modal ({result.option_count} options -> selecting [{choice}])"
                         else:
                             action_desc = f"Selecting perk [{choice}]"
