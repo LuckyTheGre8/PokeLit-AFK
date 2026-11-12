@@ -200,13 +200,19 @@ def test_full_detection_suite():
     assert m_mm.screen_type == MenuScreenType.MAIN_MENU, f"Expected MAIN_MENU, got {m_mm.screen_type}"
     assert m_mm.click_point is not None and abs(m_mm.click_point[0] - 512) <= 10 and abs(m_mm.click_point[1] - 479) <= 10
 
-    # 13. Choose Region: "Choose the region" -> Select Johto (default) or Kanto
+    # 13. Choose Region: "Choose the region" -> Select Hoenn (target), Johto, or Kanto
     im_cr = cv2.imread(str(IMG_CHOOSE_REGION))
+    menu_det_hoenn = MenuNavigatorDetector(target_region="hoenn")
+    m_cr_hoenn = menu_det_hoenn.detect(im_cr)
     menu_det_johto = MenuNavigatorDetector(target_region="johto")
     m_cr_johto = menu_det_johto.detect(im_cr)
     menu_det_kanto = MenuNavigatorDetector(target_region="kanto")
     m_cr_kanto = menu_det_kanto.detect(im_cr)
-    print(f"[TEST 13] Choose Region: Johto click={m_cr_johto.click_point} | Kanto click={m_cr_kanto.click_point}")
+    print(f"[TEST 13] Choose Region: Hoenn click={m_cr_hoenn.click_point} | Johto click={m_cr_johto.click_point} | Kanto click={m_cr_kanto.click_point}")
+    assert m_cr_hoenn.screen_type == MenuScreenType.CHOOSE_REGION, f"Expected CHOOSE_REGION, got {m_cr_hoenn.screen_type}"
+    # Verify Hoenn click falls on Hoenn card (bbox: 454..560, 204..351)
+    assert m_cr_hoenn.click_point is not None
+    assert 454 <= m_cr_hoenn.click_point[0] <= 560 and 204 <= m_cr_hoenn.click_point[1] <= 351, f"Click {m_cr_hoenn.click_point} outside Hoenn card!"
     assert m_cr_johto.screen_type == MenuScreenType.CHOOSE_REGION, f"Expected CHOOSE_REGION, got {m_cr_johto.screen_type}"
     # Verify Johto click falls on Johto card (bbox: 334..440, 204..351)
     assert m_cr_johto.click_point is not None
@@ -214,6 +220,15 @@ def test_full_detection_suite():
     # Verify Kanto click falls on Kanto card (bbox: 214..319, 204..351)
     assert m_cr_kanto.click_point is not None
     assert 214 <= m_cr_kanto.click_point[0] <= 319 and 204 <= m_cr_kanto.click_point[1] <= 351, f"Click {m_cr_kanto.click_point} outside Kanto card!"
+
+    # 13b. Verify Choose Region on user-uploaded screenshot
+    im_cr_user = cv2.imread(r"C:/Users/lucky/.gemini/antigravity/brain/4afac521-6aeb-42ab-a2ca-d5e2e53665b3/.user_uploaded/media_1794470260729_2a615719.jpg")
+    if im_cr_user is not None:
+        m_cr_user = menu_det_hoenn.detect(im_cr_user)
+        print(f"[TEST 13b] User Screenshot Choose Region: Hoenn click={m_cr_user.click_point}, conf={m_cr_user.confidence}")
+        assert m_cr_user.screen_type == MenuScreenType.CHOOSE_REGION
+        assert m_cr_user.click_point is not None
+        assert 454 <= m_cr_user.click_point[0] <= 560 and 195 <= m_cr_user.click_point[1] <= 351, f"Click {m_cr_user.click_point} outside Hoenn card on user image!"
 
     # 14. Menu False-Positive Check: Normal gameplay must NOT trigger menu actions
     m_game = menu_det.detect(im_game)

@@ -61,7 +61,7 @@ Designed to run seamlessly on both **Windows** (with background window isolation
 ### 4. Infinite AFK Match Restart Loop
 - **"Run over" Screen**: Dynamically detects the summary card across both short and tall loot layouts and clicks **`Back to menu`**.
 - **Main Lobby**: Clicks **`Play`** (`Enter the dungeon`) to start a new run.
-- **Region Selection**: Automatically chooses **`Johto`** (or **`Kanto`**, configurable via `config.json`).
+- **Region Selection**: Automatically chooses **`Hoenn`** (or **`Johto`** / **`Kanto`**, configurable via `config.json`).
 - **Clean State Reset**: Flushes leftover IPC flags, re-evaluates Auto Level, and starts WASD navigation for the next run.
 
 ### 5. Cross-Platform Engine (Windows & Linux)
@@ -260,7 +260,7 @@ Customize bot behavior by editing [`config.json`](file:///c:/Users/lucky/pokelit
   },
   "auto_restart": {
     "enabled": true,
-    "region": "johto",
+    "region": "hoenn",
     "post_click_delay_seconds": 2.5
   },
   "spatial_ai": {
@@ -274,7 +274,7 @@ Customize bot behavior by editing [`config.json`](file:///c:/Users/lucky/pokelit
 ```
 
 ### Key Options:
-- **`auto_restart.region`**: Set to `"johto"` or `"kanto"` depending on which region you want to farm.
+- **`auto_restart.region`**: Set to `"hoenn"`, `"johto"`, or `"kanto"` depending on which region you want to farm.
 - **`level_up.choice_strategy`**: Which perk button to select on level-up (`"1"`, `"2"`, or `"3"`).
 - **`auto_level.enabled`**: Automatically enables in-game Auto Level at the start of each match.
 - **`spatial_ai.threat_weight`**: Multiplier for enemy swarm repulsion (increase if taking too much contact damage).
@@ -298,7 +298,7 @@ python test_detection.py
 [TEST 7b] Rift Arrow Left: active=True, keys=['a'], angle=-175.1
 [TEST 8] Physical Portal 1: active=True, mode=portal_tear, keys=['d']
 [TEST 10] Auto Vigor: early (active=False) | late (active=True)
-[TEST 13] Choose Region: Johto click=(365, 293) | Kanto click=(238, 277)
+[TEST 13] Choose Region: Hoenn click=(485, 293) | Johto click=(365, 293) | Kanto click=(238, 277)
 [TEST 20] Obstacle Pinning Detected: mode=unstuck_escape
 [TEST 25] Auto Level Start-of-Level Activation & State Transition
 [TEST 28] Top Screen Edge Rift (y < 60): active=True, keys=['w', 'd']

@@ -265,13 +265,17 @@ class LevelUpDetector:
 class RiftDetector:
     """Detects physical purple rift portal, announcement banner, and directional compass arrow."""
 
-    def __init__(self, templates_dir: Path | str | None = None) -> None:
+    def __init__(self, templates_dir: Path | str | None = None, confidence_threshold: float = 0.68) -> None:
         if templates_dir is None:
             templates_dir = Path(__file__).resolve().parent / "templates"
         self.templates_dir = Path(templates_dir)
+        self.conf_threshold = confidence_threshold
 
         self.tpl_banner = self._load_template("rift_banner_text.png")
+        self.tpl_a_rift = self._load_template("a_rift.png")
         self.tpl_rift_text = self._load_template("rift_text_clean.png")
+        self.tpl_rift_word = self._load_template("rift_word.png")
+        self.tpl_rift_tag = self._load_template("rift_tag.png")
         self.tpl_portal = self._load_template("portal_core.png")
         self.tpl_arrow_above = self._load_template("arrow_above_portal.png")
 
@@ -280,6 +284,26 @@ class RiftDetector:
         if not path.exists():
             return None
         return cv2.imread(str(path))
+
+    def _find_top_candidates(
+        self, res: np.ndarray, thresh: float, min_dist: int = 25, max_candidates: int = 4
+    ) -> list[tuple[tuple[int, int], float]]:
+        """Find local peak correlation points above threshold with non-maximum suppression."""
+        locs = np.where(res >= thresh)
+        if len(locs[0]) == 0:
+            return []
+        scores = res[locs]
+        sorted_idx = np.argsort(-scores)
+        points = []
+        for idx in sorted_idx:
+            pt = (int(locs[1][idx]), int(locs[0][idx]))
+            score = float(scores[idx])
+            if any(abs(pt[0] - p[0]) < min_dist and abs(pt[1] - p[1]) < min_dist for p, _ in points):
+                continue
+            points.append((pt, score))
+            if len(points) >= max_candidates:
+                break
+        return points
 
     def detect(self, frame: np.ndarray) -> RiftResult:
         """Detect purple rift portal/arrow and calculate steering keys from player center."""
@@ -327,8 +351,8 @@ class RiftDetector:
 
         for i in range(1, num_labels):
             px, py, pw, ph, area = stats[i]
-            # Adaptive physical portal tear: detect tall vertical tears early as they enter screen (ph >= 45, pw >= 30, area >= 1200)
-            if area >= 1200 and pw >= 30 and ph >= 45:
+            # Adaptive physical portal tear: detect tall vertical tears early as they enter screen (area >= 800, ph >= 40, pw >= 28)
+            if area >= 800 and pw >= 28 and ph >= 40:
                 ar = ph / float(pw)
                 if 1.15 <= ar <= 3.2:
                     pad = 12
@@ -341,7 +365,7 @@ class RiftDetector:
                     dark_in_center = (np.max(center_box, axis=2) < 45).sum()
                     center_ratio = dark_in_center / float(max(1, (cw2 - cw1) * (ch2 - ch1)))
                     # True void core requires contiguous dark pixels in center of tear (rejects solid purple mobs)
-                    if dark_px >= 250 and center_ratio >= 0.15:
+                    if dark_px >= 180 and center_ratio >= 0.12:
                         score = area + dark_px * 2.0
                         if score > best_portal_score:
                             best_portal_score = score
@@ -392,17 +416,27 @@ class RiftDetector:
                     scores=scores,
                 )
 
-        # 1c. Fallback: Template Match on portal core (if available)
+        # 1c. Multi-scale template match on portal core
         max_vp = 0.0
         if self.tpl_portal is not None and play.shape[0] >= self.tpl_portal.shape[0] and play.shape[1] >= self.tpl_portal.shape[1]:
-            res_p = cv2.matchTemplate(play, self.tpl_portal, cv2.TM_CCOEFF_NORMED)
-            _, max_val_p, _, max_lp = cv2.minMaxLoc(res_p)
-            max_vp = float(max_val_p)
+            best_lp = (0, 0)
+            best_pw, best_ph = self.tpl_portal.shape[1], self.tpl_portal.shape[0]
+            for scale in [1.0, 1.2]:
+                if scale == 1.0:
+                    scaled_p = self.tpl_portal
+                else:
+                    scaled_p = cv2.resize(self.tpl_portal, (int(self.tpl_portal.shape[1] * scale), int(self.tpl_portal.shape[0] * scale)))
+                if play.shape[0] >= scaled_p.shape[0] and play.shape[1] >= scaled_p.shape[1]:
+                    res_p = cv2.matchTemplate(play, scaled_p, cv2.TM_CCOEFF_NORMED)
+                    _, val_p, _, loc_p = cv2.minMaxLoc(res_p)
+                    if val_p > max_vp:
+                        max_vp = float(val_p)
+                        best_lp = loc_p
+                        best_pw, best_ph = scaled_p.shape[1], scaled_p.shape[0]
             scores["portal_core"] = round(max_vp, 4)
 
             if max_vp >= 0.75:
-                pw, ph = self.tpl_portal.shape[1], self.tpl_portal.shape[0]
-                target_pt = (max_lp[0] + pw // 2, max_lp[1] + ph // 2)
+                target_pt = (best_lp[0] + best_pw // 2, best_lp[1] + best_ph // 2)
                 keys, angle = self._calc_direction(target_pt, target_w, target_h)
                 return RiftResult(
                     is_active=True,
@@ -415,26 +449,67 @@ class RiftDetector:
                 )
 
         # 2. Dynamic Purple Compass Arrow + RIFT label pointing towards distant portal
+        # Multi-scale & multi-candidate matching on rift_text_clean with purple halo confirmation
         max_vr = 0.0
-        if self.tpl_rift_text is not None and play.shape[0] >= self.tpl_rift_text.shape[0] and play.shape[1] >= self.tpl_rift_text.shape[1]:
-            res_r = cv2.matchTemplate(play, self.tpl_rift_text, cv2.TM_CCOEFF_NORMED)
-            _, max_val_r, _, max_lr = cv2.minMaxLoc(res_r)
-            max_vr = float(max_val_r)
-            scores["rift_text"] = round(max_vr, 4)
+        arrow_candidates = []
+        if self.tpl_rift_text is not None:
+            for s in [1.0, 1.08]:
+                if s == 1.0:
+                    tpl_sc = self.tpl_rift_text
+                else:
+                    tpl_sc = cv2.resize(self.tpl_rift_text, (int(self.tpl_rift_text.shape[1] * s), int(self.tpl_rift_text.shape[0] * s)))
+                if play.shape[0] >= tpl_sc.shape[0] and play.shape[1] >= tpl_sc.shape[1]:
+                    res_r = cv2.matchTemplate(play, tpl_sc, cv2.TM_CCOEFF_NORMED)
+                    _, top_val, _, _ = cv2.minMaxLoc(res_r)
+                    if top_val > max_vr:
+                        max_vr = float(top_val)
+                    if top_val >= self.conf_threshold:
+                        peaks = self._find_top_candidates(res_r, thresh=self.conf_threshold)
+                        for pt, sc in peaks:
+                            arrow_candidates.append((pt, sc, tpl_sc.shape[1], tpl_sc.shape[0]))
 
-            if max_vr >= 0.70:
-                tx = max_lr[0]
-                ty = max_lr[1]
-                # Verify purple cluster in the vicinity (within 70-100px)
+        scores["rift_text"] = round(max_vr, 4)
+
+        # Evaluate candidate arrow locations for purple halo
+        for (tx, ty), sc, tw, th in arrow_candidates:
+            bx1 = max(0, tx - 70)
+            bx2 = min(target_w, tx + tw + 70)
+            by1 = max(0, ty - 50)
+            by2 = min(target_h, ty + th + 50)
+            sub = norm[by1:by2, bx1:bx2]
+            purp = (sub[:, :, 0].astype(int) > sub[:, :, 1].astype(int) + 16) & (
+                sub[:, :, 2].astype(int) > sub[:, :, 1].astype(int) + 10
+            )
+            if np.sum(purp) >= 80:
+                y_idx, x_idx = np.where(purp)
+                target_pt = (bx1 + int(np.mean(x_idx)), by1 + int(np.mean(y_idx)))
+                keys, angle = self._calc_direction(target_pt, target_w, target_h)
+                return RiftResult(
+                    is_active=True,
+                    mode="rift_arrow",
+                    direction_keys=keys,
+                    angle_deg=angle,
+                    target_point=target_pt,
+                    confidence=round(sc, 4),
+                    scores=scores,
+                )
+
+        # Secondary template: fallback to rift_tag if clean was obscured
+        if self.tpl_rift_tag is not None and play.shape[0] >= self.tpl_rift_tag.shape[0] and play.shape[1] >= self.tpl_rift_tag.shape[1]:
+            res_tag = cv2.matchTemplate(play, self.tpl_rift_tag, cv2.TM_CCOEFF_NORMED)
+            _, val_tag, _, loc_tag = cv2.minMaxLoc(res_tag)
+            if val_tag >= 0.63:
+                tx, ty = loc_tag
+                tw, th = self.tpl_rift_tag.shape[1], self.tpl_rift_tag.shape[0]
                 bx1 = max(0, tx - 70)
-                bx2 = min(target_w, tx + 100)
+                bx2 = min(target_w, tx + tw + 70)
                 by1 = max(0, ty - 50)
-                by2 = min(target_h, ty + 70)
+                by2 = min(target_h, ty + th + 50)
                 sub = norm[by1:by2, bx1:bx2]
                 purp = (sub[:, :, 0].astype(int) > sub[:, :, 1].astype(int) + 16) & (
                     sub[:, :, 2].astype(int) > sub[:, :, 1].astype(int) + 10
                 )
-                if np.sum(purp) >= 120:
+                if np.sum(purp) >= 80:
                     y_idx, x_idx = np.where(purp)
                     target_pt = (bx1 + int(np.mean(x_idx)), by1 + int(np.mean(y_idx)))
                     keys, angle = self._calc_direction(target_pt, target_w, target_h)
@@ -444,29 +519,31 @@ class RiftDetector:
                         direction_keys=keys,
                         angle_deg=angle,
                         target_point=target_pt,
-                        confidence=round(max_vr, 4),
+                        confidence=round(float(val_tag), 4),
                         scores=scores,
                     )
 
         # 3. Announcement Banner ("A RIFT HAS OPENED!")
         max_vb = 0.0
-        if self.tpl_banner is not None:
-            roi_banner = norm[95:185, 380:645]
-            if roi_banner.shape[0] >= self.tpl_banner.shape[0] and roi_banner.shape[1] >= self.tpl_banner.shape[1]:
-                res_b = cv2.matchTemplate(roi_banner, self.tpl_banner, cv2.TM_CCOEFF_NORMED)
-                _, max_val_b, _, _ = cv2.minMaxLoc(res_b)
-                max_vb = float(max_val_b)
-                scores["banner"] = round(max_vb, 4)
-                if max_vb >= 0.75:
-                    return RiftResult(
-                        is_active=True,
-                        mode="banner_only",
-                        direction_keys=["s"],
-                        angle_deg=90.0,
-                        target_point=(target_w // 2, target_h),
-                        confidence=round(max_vb, 4),
-                        scores=scores,
-                    )
+        roi_banner = norm[70:210, 360:660]
+        for tpl_b in [self.tpl_banner, self.tpl_a_rift]:
+            if tpl_b is not None and roi_banner.shape[0] >= tpl_b.shape[0] and roi_banner.shape[1] >= tpl_b.shape[1]:
+                res_b = cv2.matchTemplate(roi_banner, tpl_b, cv2.TM_CCOEFF_NORMED)
+                _, val_b, _, _ = cv2.minMaxLoc(res_b)
+                if val_b > max_vb:
+                    max_vb = float(val_b)
+        scores["banner"] = round(max_vb, 4)
+
+        if max_vb >= 0.75:
+            return RiftResult(
+                is_active=True,
+                mode="banner_only",
+                direction_keys=["s"],
+                angle_deg=90.0,
+                target_point=(target_w // 2, target_h),
+                confidence=round(max_vb, 4),
+                scores=scores,
+            )
 
         return RiftResult(
             is_active=False,
@@ -700,13 +777,15 @@ AutoLevelDetector = AutoVigorDetector
 class MenuNavigatorDetector:
     """Detects end-of-match Run Over screen, Main Menu Play button, and Choose Region modal."""
 
-    def __init__(self, templates_dir: Path | str | None = None, target_region: str = "johto") -> None:
+    def __init__(self, templates_dir: Path | str | None = None, target_region: str = "hoenn") -> None:
         if templates_dir is None:
             templates_dir = Path(__file__).resolve().parent / "templates"
         self.templates_dir = Path(templates_dir)
         self.target_region = target_region.lower()
-        if self.target_region == "jhoto":
+        if self.target_region in ("jhoto", "johto"):
             self.target_region = "johto"
+        elif self.target_region in ("hoenn", "hoen"):
+            self.target_region = "hoenn"
 
         self.tpl_run_over = self._load_template("run_over_title.png")
         self.tpl_btn_menu = self._load_template("back_to_menu_btn.png")
@@ -714,6 +793,7 @@ class MenuNavigatorDetector:
         self.tpl_region = self._load_template("choose_region_title.png")
         self.tpl_kanto = self._load_template("kanto_word.png")
         self.tpl_johto = self._load_template("johto_word.png")
+        self.tpl_hoenn = self._load_template("hoenn_word.png")
         self.tpl_modal_back = self._load_template("modal_back_btn.png")
 
     def _load_template(self, filename: str) -> np.ndarray | None:
@@ -771,6 +851,18 @@ class MenuNavigatorDetector:
                                 res_jh = cv2.matchTemplate(roi_jh, self.tpl_johto, cv2.TM_CCOEFF_NORMED)
                                 loc_jh = cv2.minMaxLoc(res_jh)[3]
                                 click_pt = (310 + loc_jh[0] + self.tpl_johto.shape[1] // 2, 180 + loc_jh[1] + self.tpl_johto.shape[0] // 2)
+                    elif region == "hoenn":
+                        click_pt = (507, 277)  # Center of Hoenn card
+                        if self.tpl_hoenn is not None:
+                            roi_hn = norm[180:360, 430:580]
+                            if roi_hn.shape[0] >= self.tpl_hoenn.shape[0] and roi_hn.shape[1] >= self.tpl_hoenn.shape[1]:
+                                res_hn = cv2.matchTemplate(roi_hn, self.tpl_hoenn, cv2.TM_CCOEFF_NORMED)
+                                loc_hn = cv2.minMaxLoc(res_hn)[3]
+                                click_pt = (430 + loc_hn[0] + self.tpl_hoenn.shape[1] // 2, 180 + loc_hn[1] + self.tpl_hoenn.shape[0] // 2)
+                    elif region == "sinnoh":
+                        click_pt = (627, 277)  # Center of Sinnoh card
+                    elif region == "unova":
+                        click_pt = (747, 277)  # Center of Unova card
                     else:  # default to Kanto
                         click_pt = (266, 277)  # Center of Kanto card
                         if self.tpl_kanto is not None:

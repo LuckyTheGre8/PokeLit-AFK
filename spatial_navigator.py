@@ -251,7 +251,7 @@ class SpatialNavigator:
         """Detect physical rift portal directly on normalized frame."""
         h, w = norm.shape[:2]
         v_all = np.max(norm, axis=2)
-        if (v_all < 15).sum() / (w * h) > 0.18:
+        if (v_all < 15).sum() / (w * h) > 0.30:
             return False, [], 0.0, None
 
         ui = np.ones((h, w), dtype=bool)

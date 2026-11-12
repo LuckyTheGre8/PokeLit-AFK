@@ -150,9 +150,11 @@ AL_ENABLED = AL_CFG.get("enabled", True)
 
 AR_CFG = CONFIG.get("auto_restart", {})
 AR_ENABLED = AR_CFG.get("enabled", True)
-AR_REGION = str(AR_CFG.get("region", "johto")).lower()
-if AR_REGION == "jhoto":
+AR_REGION = str(AR_CFG.get("region", "hoenn")).lower()
+if AR_REGION in ("jhoto", "johto"):
     AR_REGION = "johto"
+elif AR_REGION in ("hoenn", "hoen"):
+    AR_REGION = "hoenn"
 AR_DELAY = float(AR_CFG.get("post_click_delay_seconds", 2.5))
 AR_RO_COOLDOWN = float(AR_CFG.get("run_over_cooldown_seconds", 5.0))
 
@@ -161,8 +163,9 @@ shutdown = threading.Event()
 lock = threading.Lock()
 monitor_thread: threading.Thread | None = None
 
+RIFT_THRESH = float(RIFT_CFG.get("confidence_threshold", 0.68))
 detector = LevelUpDetector(confidence_threshold=CONF_THRESH)
-rift_detector = RiftDetector()
+rift_detector = RiftDetector(confidence_threshold=RIFT_THRESH)
 timer_detector = GameTimerDetector()
 auto_level_detector = AutoVigorDetector()
 auto_vigor_detector = auto_level_detector
