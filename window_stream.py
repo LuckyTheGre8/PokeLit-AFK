@@ -36,6 +36,7 @@ else:
 WM_KEYDOWN = 0x0100
 WM_KEYUP = 0x0101
 WM_CHAR = 0x0102
+WM_MOUSEMOVE = 0x0200
 WM_LBUTTONDOWN = 0x0201
 WM_LBUTTONUP = 0x0202
 PW_RENDERFULLCONTENT = 0x00000002
@@ -238,10 +239,29 @@ class WindowInput:
         user32.ClientToScreen(self.hwnd, ctypes.byref(pt))
         return pt.x, pt.y
 
-    def click(self, client_x: int, client_y: int) -> None:
-        """Send WM_LBUTTONDOWN and WM_LBUTTONUP directly to target window at client coordinates (single click)."""
+    def click(self, client_x: int, client_y: int, count: int = 1) -> None:
+        """Send WM_MOUSEMOVE, WM_LBUTTONDOWN, and WM_LBUTTONUP directly to target window at client coordinates."""
+        if not user32.IsWindow(self.target_hwnd):
+            self.target_hwnd = self._resolve_target_hwnd()
         dest_hwnd = self.target_hwnd or self.hwnd
         lparam = (int(client_y) << 16) | (int(client_x) & 0xFFFF)
-        user32.PostMessageW(dest_hwnd, WM_LBUTTONDOWN, 0x0001, lparam)
-        time.sleep(0.06)
-        user32.PostMessageW(dest_hwnd, WM_LBUTTONUP, 0x0000, lparam)
+
+        for i in range(max(1, count)):
+            if i > 0:
+                time.sleep(0.06)
+            # Send WM_MOUSEMOVE so Chromium and Canvas hit-testing update cursor location
+            user32.PostMessageW(dest_hwnd, WM_MOUSEMOVE, 0x0000, lparam)
+            if dest_hwnd != self.hwnd and user32.IsWindow(self.hwnd):
+                user32.PostMessageW(self.hwnd, WM_MOUSEMOVE, 0x0000, lparam)
+            time.sleep(0.02)
+
+            # Send WM_LBUTTONDOWN (MK_LBUTTON = 0x0001)
+            user32.PostMessageW(dest_hwnd, WM_LBUTTONDOWN, 0x0001, lparam)
+            if dest_hwnd != self.hwnd and user32.IsWindow(self.hwnd):
+                user32.PostMessageW(self.hwnd, WM_LBUTTONDOWN, 0x0001, lparam)
+            time.sleep(0.08)
+
+            # Send WM_LBUTTONUP
+            user32.PostMessageW(dest_hwnd, WM_LBUTTONUP, 0x0000, lparam)
+            if dest_hwnd != self.hwnd and user32.IsWindow(self.hwnd):
+                user32.PostMessageW(self.hwnd, WM_LBUTTONUP, 0x0000, lparam)

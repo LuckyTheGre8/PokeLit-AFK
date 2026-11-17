@@ -208,8 +208,8 @@ def movement_loop() -> None:
             if PAUSE_FILE.exists():
                 try:
                     pause_age = time.time() - PAUSE_FILE.stat().st_mtime
-                    if pause_age > 3.0:
-                        # Auto-expire stale leftover pause signal (> 3.0s) so bot never hangs indefinitely
+                    if pause_age > 6.0:
+                        # Auto-expire stale leftover pause signal (> 6.0s) so bot never hangs indefinitely
                         PAUSE_FILE.unlink(missing_ok=True)
                     else:
                         if active_keys_held:

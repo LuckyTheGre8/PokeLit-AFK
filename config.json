@@ -3,7 +3,7 @@
     "enabled": true,
     "title_keyword": "pokelit",
     "hwnd": null,
-    "focus_flick_on_select": true
+    "focus_flick_on_select": false
   },
   "movement": {
     "keys": ["w", "a", "s", "d"],

@@ -97,18 +97,20 @@ def load_config() -> dict:
             "confidence_threshold": 0.75,
         },
         "auto_level": {
-            "enabled": True,
+            "enabled": False,
         },
         "auto_vigor": {
-            "enabled": True,
+            "enabled": False,
             "trigger_minutes": 10.0,
             "use_game_timer": True,
         },
         "auto_restart": {
             "enabled": True,
-            "region": "johto",
-            "post_click_delay_seconds": 2.5,
-            "run_over_cooldown_seconds": 5.0,
+            "region": "hoenn",
+            "delay_between_clicks_seconds": 3.0,
+            "pre_click_settle_seconds": 1.2,
+            "post_click_delay_seconds": 3.0,
+            "run_over_cooldown_seconds": 6.0,
         },
     }
     if CONFIG_FILE.exists():
@@ -126,7 +128,7 @@ TARGET_CFG = CONFIG.get("target_window", {})
 TARGET_ENABLED = TARGET_CFG.get("enabled", True)
 TITLE_KEYWORD = TARGET_CFG.get("title_keyword", "pokelit")
 MANUAL_HWND = TARGET_CFG.get("hwnd", None)
-FOCUS_FLICK = TARGET_CFG.get("focus_flick_on_select", True)
+FOCUS_FLICK = TARGET_CFG.get("focus_flick_on_select", False)
 
 LVL_CFG = CONFIG.get("level_up", {})
 CONF_THRESH = LVL_CFG.get("confidence_threshold", 0.78)
@@ -149,7 +151,7 @@ RIFT_CFG = CONFIG.get("rift_navigation", {})
 RIFT_ENABLED = RIFT_CFG.get("enabled", True)
 
 AL_CFG = CONFIG.get("auto_level", CONFIG.get("auto_vigor", {}))
-AL_ENABLED = AL_CFG.get("enabled", True)
+AL_ENABLED = AL_CFG.get("enabled", False)
 
 AR_CFG = CONFIG.get("auto_restart", {})
 AR_ENABLED = AR_CFG.get("enabled", True)
@@ -211,9 +213,16 @@ def resolve_capture_and_input() -> tuple[WindowCapture | ScreenGrabber, WindowIn
 
 def set_pause(active: bool) -> None:
     """Create or remove the pause signal file for random_movement.py."""
+    global active_win_input
     try:
         if active:
             PAUSE_FILE.touch(exist_ok=True)
+            if active_win_input:
+                for k in ["w", "a", "s", "d"]:
+                    try:
+                        active_win_input.key_up(k)
+                    except Exception:
+                        pass
         else:
             if PAUSE_FILE.exists():
                 PAUSE_FILE.unlink(missing_ok=True)
@@ -238,12 +247,18 @@ def set_rift_movement(active: bool, keys: list[str] | None = None, angle: float 
 
 
 def execute_choice(choice: str) -> None:
-    """Execute selection specifically on target window or global fallback."""
+    """Execute selection specifically on target window or global fallback.
+    Never steals foreground window if the user is working in another app.
+    """
     global active_hwnd, active_win_input
 
     if active_hwnd and active_win_input:
-        if FOCUS_FLICK:
-            prev_fg = user32.GetForegroundWindow()
+        prev_fg = user32.GetForegroundWindow()
+        # Background safeguard: If user is working in another window (prev_fg != active_hwnd) or FOCUS_FLICK is false,
+        # tap choice purely via background Win32 PostMessage without interrupting the user!
+        if (prev_fg and prev_fg != active_hwnd) or (not FOCUS_FLICK):
+            active_win_input.tap(choice, hold_duration=KEY_HOLD_SEC)
+        else:
             try:
                 user32.SetForegroundWindow(active_hwnd)
                 time.sleep(0.04)
@@ -252,14 +267,14 @@ def execute_choice(choice: str) -> None:
             finally:
                 if prev_fg and prev_fg != active_hwnd:
                     user32.SetForegroundWindow(prev_fg)
-        else:
-            active_win_input.tap(choice, hold_duration=KEY_HOLD_SEC)
     else:
         selector.tap_choice(choice)
 
 
-def execute_click(norm_x: int, norm_y: int) -> None:
-    """Click at normalized coordinate on target window or screen with physical DPI and aspect scaling."""
+def execute_click(norm_x: int, norm_y: int, count: int = 1) -> None:
+    """Click at normalized coordinate on target window or screen with physical DPI and aspect scaling.
+    Guarantees that background input never moves the user's physical mouse cursor or steals focus.
+    """
     global active_hwnd, active_win_input
 
     if active_hwnd and active_win_input:
@@ -272,35 +287,59 @@ def execute_click(norm_x: int, norm_y: int) -> None:
         scale = cw / 1024.0
         client_x = int(norm_x * scale)
         client_y = int(norm_y * scale)
-        screen_x, screen_y = active_win_input.client_to_screen(client_x, client_y)
 
-        if FOCUS_FLICK:
-            prev_fg = user32.GetForegroundWindow()
+        prev_fg = user32.GetForegroundWindow()
+
+        # Non-intrusive background click safeguard:
+        # If user is working in another application (prev_fg != active_hwnd) or FOCUS_FLICK is disabled,
+        # click purely via background Win32 PostMessage WITHOUT stealing focus or moving the OS mouse cursor!
+        if (prev_fg and prev_fg != active_hwnd) or (not FOCUS_FLICK):
+            active_win_input.click(client_x, client_y, count=count)
+        else:
+            pyautogui.FAILSAFE = False
+            screen_x, screen_y = active_win_input.client_to_screen(client_x, client_y)
+            orig_pos = pyautogui.position()
             try:
                 user32.SetForegroundWindow(active_hwnd)
-                time.sleep(0.06)
-                # Physical mouse down with 80ms hold duration for HTML5 canvas/WebGL events
+                time.sleep(0.04)
                 pyautogui.moveTo(screen_x, screen_y)
                 time.sleep(0.02)
-                pyautogui.mouseDown(screen_x, screen_y, button="left")
-                time.sleep(0.08)
-                pyautogui.mouseUp(screen_x, screen_y, button="left")
-                time.sleep(0.05)
+                for i in range(max(1, count)):
+                    if i > 0:
+                        time.sleep(0.06)
+                    pyautogui.mouseDown(screen_x, screen_y, button="left")
+                    time.sleep(0.08)
+                    pyautogui.mouseUp(screen_x, screen_y, button="left")
+                time.sleep(0.04)
             finally:
+                # Restore original cursor position so user's cursor is not hijacked
+                try:
+                    pyautogui.moveTo(orig_pos.x, orig_pos.y)
+                except Exception:
+                    pass
                 if prev_fg and prev_fg != active_hwnd:
                     user32.SetForegroundWindow(prev_fg)
-        else:
-            active_win_input.click(client_x, client_y)
     else:
+        pyautogui.FAILSAFE = False
         sw, sh = pyautogui.size()
         scale = sw / 1024.0
         screen_x = int(norm_x * scale)
         screen_y = int(norm_y * scale)
-        pyautogui.moveTo(screen_x, screen_y)
-        time.sleep(0.02)
-        pyautogui.mouseDown(screen_x, screen_y, button="left")
-        time.sleep(0.08)
-        pyautogui.mouseUp(screen_x, screen_y, button="left")
+        orig_pos = pyautogui.position()
+        try:
+            pyautogui.moveTo(screen_x, screen_y)
+            time.sleep(0.02)
+            for i in range(max(1, count)):
+                if i > 0:
+                    time.sleep(0.06)
+                pyautogui.mouseDown(screen_x, screen_y, button="left")
+                time.sleep(0.08)
+                pyautogui.mouseUp(screen_x, screen_y, button="left")
+        finally:
+            try:
+                pyautogui.moveTo(orig_pos.x, orig_pos.y)
+            except Exception:
+                pass
 
 
 def monitor_loop() -> None:
@@ -326,13 +365,18 @@ def monitor_loop() -> None:
     last_active_rift_keys: list[str] = []
     last_active_rift_angle: float | None = None
     last_level_toggle_time = 0.0
+    auto_level_attempts = 0
     last_run_over_click_time = 0.0
     last_play_click_time = 0.0
     last_submenu_back_time = 0.0
     last_menu_click_time = 0.0
-    global auto_level_confirmed_on, auto_vigor_active
+    main_menu_consecutive_clicks = 0
+    submenu_back_consecutive_clicks = 0
+    global auto_level_confirmed_on, auto_vigor_active, match_start_time
     auto_level_confirmed_on = False
     auto_vigor_active = False
+    if "match_start_time" not in globals() or match_start_time is None:
+        match_start_time = time.monotonic()
 
     try:
         while running.is_set() and not shutdown.is_set():
@@ -343,10 +387,19 @@ def monitor_loop() -> None:
 
             try:
                 frame = active_cap.grab_bgr()
+                menu_res = MenuDetectionResult()
 
-                # 0. Menu & Match End Navigation ("Run over" -> "Back to menu" -> "Play" -> Region)
-                if AR_ENABLED:
-                    menu_res: MenuDetectionResult = menu_detector.detect(frame)
+                # 0. Active Match vs Menu Determination:
+                # Detect whether in-game HUD timer is actively ticking (e.g. 0:09, 12:45).
+                # When match timer is detected, player is actively playing a live match!
+                # Menus (Run Over, Main Menu, Choose Region, Submenu Back) CANNOT be present.
+                timer_res = timer_detector.detect(frame)
+                is_active_gameplay = timer_res.detected
+
+                # 0b. Menu & Match End Navigation ("Run over" -> "Back to menu" -> "Play" -> Region)
+                # Strictly disabled during active match gameplay to prevent any false-positive clicks!
+                if AR_ENABLED and not is_active_gameplay and (time.monotonic() - match_start_time > 4.0):
+                    menu_res = menu_detector.detect(frame)
                     if menu_res.screen_type != MenuScreenType.NONE and menu_res.click_point:
                         set_pause(True)
                         set_rift_movement(False)
@@ -358,6 +411,8 @@ def monitor_loop() -> None:
                             continue
 
                         if menu_res.screen_type == MenuScreenType.RUN_OVER:
+                            main_menu_consecutive_clicks = 0
+                            submenu_back_consecutive_clicks = 0
                             if (now_menu - last_run_over_click_time < AR_RO_COOLDOWN):
                                 time.sleep(0.3)
                                 continue
@@ -391,13 +446,23 @@ def monitor_loop() -> None:
                             # Extra delay after transition to let the Main Menu fully settle
                             settle_delay = max(3.0, AR_DELAY)
                             print(f" -> Waiting {settle_delay:.1f}s for Main Menu to completely settle...")
+                            set_pause(True)
                             time.sleep(settle_delay)
                             last_menu_click_time = time.monotonic()
+                            set_pause(True)
                             print("==================================================\n")
                             continue
 
                         elif menu_res.screen_type == MenuScreenType.MAIN_MENU:
-                            if (now_menu - last_play_click_time < 3.5):
+                            submenu_back_consecutive_clicks = 0
+                            # Prevent indefinite 15s lockouts: if repeated attempts occurred, apply brief 3.5s cooldown then reset
+                            if main_menu_consecutive_clicks >= 3:
+                                if now_menu - last_play_click_time < 3.5:
+                                    time.sleep(0.3)
+                                    continue
+                                else:
+                                    main_menu_consecutive_clicks = 0
+                            elif (now_menu - last_play_click_time < 3.0):
                                 time.sleep(0.3)
                                 continue
 
@@ -410,16 +475,38 @@ def monitor_loop() -> None:
                             fresh_menu = menu_detector.detect(fresh_frame)
                             click_pt = fresh_menu.click_point if (fresh_menu.screen_type == MenuScreenType.MAIN_MENU and fresh_menu.click_point) else menu_res.click_point
 
-                            print(f" -> Clicking 'Play' (Enter dungeon) at {click_pt}...")
-                            execute_click(click_pt[0], click_pt[1])
+                            # Use firm 2-click burst (focus canvas + activate button) if previous attempt didn't trigger
+                            click_count = 2 if main_menu_consecutive_clicks >= 1 else 1
+                            burst_label = " (firm focus+click burst)" if click_count > 1 else ""
+                            print(f" -> Clicking 'Play' (Enter dungeon) at {click_pt}{burst_label}...")
+                            execute_click(click_pt[0], click_pt[1], count=click_count)
                             now_after = time.monotonic()
                             last_play_click_time = now_after
                             last_menu_click_time = now_after
-                            time.sleep(AR_DELAY)
+                            main_menu_consecutive_clicks += 1
+                            set_pause(True)
+
+                            # Actively wait up to 2.0s for 'Choose Region' modal to appear
+                            start_modal_wait = time.monotonic()
+                            modal_appeared = False
+                            while time.monotonic() - start_modal_wait < 2.0:
+                                time.sleep(0.25)
+                                check_f = active_cap.grab_bgr()
+                                check_m = menu_detector.detect(check_f)
+                                if check_m.screen_type == MenuScreenType.CHOOSE_REGION:
+                                    print(f" -> 'Choose Region' modal confirmed! Proceeding immediately...")
+                                    main_menu_consecutive_clicks = 0
+                                    modal_appeared = True
+                                    break
+
+                            if not modal_appeared:
+                                time.sleep(AR_DELAY)
                             print("==================================================\n")
                             continue
 
                         elif menu_res.screen_type == MenuScreenType.CHOOSE_REGION:
+                            main_menu_consecutive_clicks = 0
+                            submenu_back_consecutive_clicks = 0
                             print(f"\n==================================================")
                             print(f" [CHOOSE REGION DETECTED]")
                             print(f" -> Stabilizing 0.5s before selecting region...")
@@ -438,6 +525,7 @@ def monitor_loop() -> None:
                             # Reset match start time and Auto Level flag for the fresh game
                             match_start_time = time.monotonic()
                             auto_level_confirmed_on = False
+                            auto_level_attempts = 0
                             auto_vigor_active = False
 
                             set_pause(False)
@@ -446,6 +534,10 @@ def monitor_loop() -> None:
                             continue
 
                         elif menu_res.screen_type == MenuScreenType.SUBMENU_BACK:
+                            main_menu_consecutive_clicks = 0
+                            if submenu_back_consecutive_clicks >= 3 and (now_menu - last_submenu_back_time < 15.0):
+                                time.sleep(0.3)
+                                continue
                             if (now_menu - last_submenu_back_time < 3.0):
                                 time.sleep(0.3)
                                 continue
@@ -464,9 +556,13 @@ def monitor_loop() -> None:
                             now_after = time.monotonic()
                             last_submenu_back_time = now_after
                             last_menu_click_time = now_after
+                            submenu_back_consecutive_clicks += 1
                             time.sleep(AR_DELAY)
                             print("==================================================\n")
                             continue
+                else:
+                    main_menu_consecutive_clicks = 0
+                    submenu_back_consecutive_clicks = 0
 
                 # 1. First priority: Check for Level-Up or Item Modal
                 result: DetectionResult = detector.detect(frame)
@@ -553,54 +649,37 @@ def monitor_loop() -> None:
                     continue
 
                 # 2. Check Auto Level state (Start of Level Automation):
-                # When at the start of a level, verify if AUTO LEVEL is present.
-                # If it is dark yellow (OFF), click it ONCE and verify it transitions to bright yellow (ON)!
-                # Once confirmed bright yellow, it stays locked ON and will not be clicked again for this match.
-                if AL_ENABLED:
+                # When enabled, only toggles once or twice at the start of the match (first 45s).
+                # Once 2 attempts are made or button is confirmed active, it stops permanently for this match.
+                if AL_ENABLED and (auto_level_attempts < 2) and (not auto_level_confirmed_on) and (time.monotonic() - match_start_time <= 45.0):
                     al_res = auto_level_detector.detect(frame)
                     now_v = time.monotonic()
                     if al_res.is_present and al_res.norm_point:
-                        if not al_res.is_active:
-                            # Button is currently dark yellow (OFF)
-                            auto_level_confirmed_on = False
                         if al_res.is_active:
-                            if not auto_level_confirmed_on:
-                                auto_level_confirmed_on = True
-                                print(f"\n==================================================")
-                                print(f" [AUTO LEVEL CONFIRMED] Button is already ACTIVE (bright yellow) at {al_res.norm_point}!")
-                                print(f" In-game auto-level preset is active for this match.")
-                                print(f"==================================================\n")
-                        elif (not auto_level_confirmed_on) and (now_v - last_level_toggle_time >= 2.0):
+                            auto_level_confirmed_on = True
+                            print(f"\n==================================================")
+                            print(f" [AUTO LEVEL CONFIRMED] Button is ACTIVE (bright yellow) at {al_res.norm_point}!")
+                            print(f" In-game auto-level preset is active for this match.")
+                            print(f"==================================================\n")
+                        elif now_v - last_level_toggle_time >= 2.0:
                             last_level_toggle_time = now_v
+                            auto_level_attempts += 1
                             theme_label = "dark yellow" if al_res.theme == "yellow" else "inactive"
                             print(f"\n==================================================")
-                            print(f" [START OF LEVEL - AUTO LEVEL DETECTED]")
+                            print(f" [START OF LEVEL - AUTO LEVEL DETECTED (Attempt {auto_level_attempts}/2)]")
                             print(f" -> Button confirmed at {al_res.norm_point} in {theme_label} state.")
                             print(f" -> Clicking once to turn AUTO LEVEL ON...")
                             set_pause(True)
                             try:
                                 time.sleep(0.08)
                                 execute_click(al_res.norm_point[0], al_res.norm_point[1])
-
-                                # Settle wait for in-game click reaction
                                 time.sleep(0.35)
                                 check_frame = active_cap.grab_bgr()
                                 check_al = auto_level_detector.detect(check_frame)
-                                if check_al.is_active:
+                                if check_al.is_active or auto_level_attempts >= 2:
                                     auto_level_confirmed_on = True
-                                    print(f" -> [CONFIRMED] Button transitioned from dark yellow to bright yellow (AUTO LEVEL ON)!")
-                                    print(f" -> Auto Level is now active for this match.")
-                                else:
-                                    print(f" -> Transition check inconclusive; retrying single click...")
-                                    execute_click(al_res.norm_point[0], al_res.norm_point[1])
-                                    time.sleep(0.35)
-                                    check_frame2 = active_cap.grab_bgr()
-                                    check_al2 = auto_level_detector.detect(check_frame2)
-                                    if check_al2.is_active:
-                                        auto_level_confirmed_on = True
-                                        print(f" -> [CONFIRMED ON RETRY] Button transitioned to bright yellow (AUTO LEVEL ON)!")
-                                    else:
-                                        print(f" -> [WARN] Bright yellow state not confirmed yet; will check again next cycle.")
+                                    status_str = "bright yellow (AUTO LEVEL ON)" if check_al.is_active else "max attempts reached"
+                                    print(f" -> [DONE] Auto Level setup finished ({status_str}) for this match.")
                             finally:
                                 set_pause(False)
                             print(f"==================================================\n")

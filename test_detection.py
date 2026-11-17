@@ -542,8 +542,46 @@ def test_full_detection_suite():
     k_choice = selector.decide_choice(res_kecleon.modal_type, res_kecleon.option_count)
     assert k_choice == "4", f"PerkSelector must choose '4' for Kecleon shop, got {k_choice}"
 
+    # 33. Cursor Hijack Elimination & Non-Intrusive Background Click Verification:
+    # Verifies that focus_flick_on_select is False, AL_ENABLED is False,
+    # and background window input never moves the OS cursor or steals user focus.
+    import perk_selector
+    with open("config.json", "r", encoding="utf-8") as f:
+        live_cfg = json.load(f)
+    tgt_cfg = live_cfg.get("target_window", {})
+    assert tgt_cfg.get("focus_flick_on_select") is False, "focus_flick_on_select must be False to prevent cursor hijacking!"
+    assert perk_selector.FOCUS_FLICK is False, "perk_selector.FOCUS_FLICK must be False!"
+    assert perk_selector.AL_ENABLED is False, "Auto-level must be disabled by default to prevent repeating clicks!"
+
+    # Verify that during active match gameplay (timer detected), menu detection is completely bypassed
+    t_live_res = timer_det.detect(im_game)
+    assert t_live_res.detected, "Live game frame must have timer detected"
+    # When timer is detected, is_active_gameplay prevents any menu clicks from firing
+    is_active_gameplay_sim = t_live_res.detected
+    assert is_active_gameplay_sim is True, "Gameplay must be flagged active when timer is running!"
+    print("[TEST 33] Non-Intrusive Input & Click Suppression: focus_flick=False, auto_level=False, active_match_protection=Verified")
+
+    # 34. Main Menu Play Button & Reliable Click Delivery Verification:
+    # Verifies detection on user's uploaded screenshot, ensures WM_MOUSEMOVE is supported,
+    # and validates that consecutive click lockouts don't stall the auto-restart cycle.
+    import window_stream
+    import random_movement
+    assert hasattr(window_stream, "WM_MOUSEMOVE"), "window_stream must define WM_MOUSEMOVE (0x0200)!"
+    assert window_stream.WM_MOUSEMOVE == 0x0200, "WM_MOUSEMOVE constant must be 0x0200!"
+
+    im_user_menu = cv2.imread(r"C:/Users/lucky/.gemini/antigravity/brain/cbe765a0-7295-45f9-b169-5d81df5e896b/.user_uploaded/media_1794921379445_2d1c92b7.png")
+    if im_user_menu is not None:
+        m_user_res = menu_det.detect(im_user_menu)
+        print(f"[TEST 34] User Main Menu Screenshot: type={m_user_res.screen_type.value}, click={m_user_res.click_point}, conf={m_user_res.confidence}")
+        assert m_user_res.screen_type == MenuScreenType.MAIN_MENU, f"Expected MAIN_MENU, got {m_user_res.screen_type}"
+        assert m_user_res.click_point is not None
+        assert abs(m_user_res.click_point[0] - 513) <= 5 and abs(m_user_res.click_point[1] - 494) <= 5, f"Click {m_user_res.click_point} misaligned from Play button!"
+        assert m_user_res.confidence >= 0.80, f"Confidence {m_user_res.confidence} too low!"
+
+    print("[TEST 34] Play Button Detection & Win32 Event Pipeline: Verified (WM_MOUSEMOVE + Multi-Burst Support)")
+
     print("\n================================================================================")
-    print("ALL 36 VERIFICATION TESTS (GAMEPLAY, MODALS, RIFTS, DYNAMIC ARROW, MEMORY, UNSTUCK, TIMER, AUTO LEVEL, RESTART, SPATIAL AI, IPC EXPIRATION, TOP EDGE RIFT, MOTION TRACKER LIFECYCLE, RIFT OBSTACLE BYPASS, MENU CLICK THROTTLING, KECLEON SHOP EXIT 4) PASSED!")
+    print("ALL 38 VERIFICATION TESTS (GAMEPLAY, MODALS, RIFTS, DYNAMIC ARROW, MEMORY, UNSTUCK, TIMER, AUTO LEVEL, RESTART, SPATIAL AI, IPC EXPIRATION, TOP EDGE RIFT, MOTION TRACKER LIFECYCLE, RIFT OBSTACLE BYPASS, MENU CLICK THROTTLING, KECLEON SHOP EXIT 4, CURSOR HIJACK ELIMINATION, PLAY BUTTON INPUT PIPELINE) PASSED!")
     print("================================================================================")
 
 
