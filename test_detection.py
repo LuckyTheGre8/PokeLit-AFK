@@ -580,8 +580,37 @@ def test_full_detection_suite():
 
     print("[TEST 34] Play Button Detection & Win32 Event Pipeline: Verified (WM_MOUSEMOVE + Multi-Burst Support)")
 
+    # 35. New "You fell..." End-of-Run Screen (Centered "Back to menu" Button) & Anti-Kecleon-FP Verification:
+    im_you_fell = cv2.imread(r"C:/Users/lucky/.gemini/antigravity/brain/4afac521-6aeb-42ab-a2ca-d5e2e53665b3/.user_uploaded/media_1794991381791_709dcccf.jpg")
+    if im_you_fell is not None:
+        m_fell = menu_det.detect(im_you_fell)
+        print(f"[TEST 35] You Fell Screen: type={m_fell.screen_type.value}, click={m_fell.click_point}, conf={m_fell.confidence}")
+        assert m_fell.screen_type == MenuScreenType.RUN_OVER, f"Expected RUN_OVER on 'You fell...' screen, got {m_fell.screen_type}"
+        assert m_fell.click_point is not None
+        assert abs(m_fell.click_point[0] - 515) <= 10 and abs(m_fell.click_point[1] - 607) <= 10, f"Click {m_fell.click_point} misaligned from centered 'Back to menu' button!"
+        assert m_fell.confidence >= 0.80, f"Confidence {m_fell.confidence} too low on 'You fell...' button!"
+
+        # Ensure LevelUpDetector does NOT false-trigger KECLEON_SHOP on 'You fell...' screen
+        res_fell_modal = detector.detect(im_you_fell)
+        assert not res_fell_modal.is_level_up, f"False positive modal detected on 'You fell...' screen: {res_fell_modal.modal_type}"
+        print("[TEST 35] Anti-Kecleon False Positive on 'You fell...': Verified (modal=none)")
+
+    # 36. New Split Yellow "Play" / Blue "Event" Main Menu Button Verification:
+    # Verifies the bot detects MAIN_MENU and clicks strictly on the yellow "Play" button (x~441, y~490),
+    # staying well clear of the blue "Event" button (x >= 512).
+    im_split_menu = cv2.imread(r"C:/Users/lucky/.gemini/antigravity/brain/4afac521-6aeb-42ab-a2ca-d5e2e53665b3/.user_uploaded/media_1795023170937_203e80b9.jpg")
+    if im_split_menu is not None:
+        m_split = menu_det.detect(im_split_menu)
+        print(f"[TEST 36] Split Yellow Play / Blue Event Menu: type={m_split.screen_type.value}, click={m_split.click_point}, conf={m_split.confidence}")
+        assert m_split.screen_type == MenuScreenType.MAIN_MENU, f"Expected MAIN_MENU on split Play/Event screen, got {m_split.screen_type}"
+        assert m_split.click_point is not None
+        assert 385 <= m_split.click_point[0] <= 495 and 470 <= m_split.click_point[1] <= 512, (
+            f"Click {m_split.click_point} must land inside yellow Play half (x<=495), NOT the blue Event button (x>=512)!"
+        )
+        assert m_split.confidence >= 0.90, f"Confidence {m_split.confidence} too low on new yellow Play button!"
+
     print("\n================================================================================")
-    print("ALL 38 VERIFICATION TESTS (GAMEPLAY, MODALS, RIFTS, DYNAMIC ARROW, MEMORY, UNSTUCK, TIMER, AUTO LEVEL, RESTART, SPATIAL AI, IPC EXPIRATION, TOP EDGE RIFT, MOTION TRACKER LIFECYCLE, RIFT OBSTACLE BYPASS, MENU CLICK THROTTLING, KECLEON SHOP EXIT 4, CURSOR HIJACK ELIMINATION, PLAY BUTTON INPUT PIPELINE) PASSED!")
+    print("ALL 40 VERIFICATION TESTS (GAMEPLAY, MODALS, RIFTS, DYNAMIC ARROW, MEMORY, UNSTUCK, TIMER, AUTO LEVEL, RESTART, SPATIAL AI, IPC EXPIRATION, TOP EDGE RIFT, MOTION TRACKER LIFECYCLE, RIFT OBSTACLE BYPASS, MENU CLICK THROTTLING, KECLEON SHOP EXIT 4, CURSOR HIJACK ELIMINATION, PLAY BUTTON INPUT PIPELINE, YOU FELL BACK-TO-MENU, SPLIT YELLOW PLAY BUTTON) PASSED!")
     print("================================================================================")
 
 

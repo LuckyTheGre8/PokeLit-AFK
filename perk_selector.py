@@ -391,15 +391,17 @@ def monitor_loop() -> None:
 
                 # 0. Active Match vs Menu Determination:
                 # Detect whether in-game HUD timer is actively ticking (e.g. 0:09, 12:45).
-                # When match timer is detected, player is actively playing a live match!
-                # Menus (Run Over, Main Menu, Choose Region, Submenu Back) CANNOT be present.
+                # Non-end-of-run menus (Main Menu, Choose Region, Submenu Back) are blocked during gameplay.
+                # End-of-run ("Run over" / "You fell...") is ALWAYS allowed because its top-center title can overlap
+                # the timer ROI and its yellow "Back to menu" button appears over the dimmed game screen.
                 timer_res = timer_detector.detect(frame)
                 is_active_gameplay = timer_res.detected
 
-                # 0b. Menu & Match End Navigation ("Run over" -> "Back to menu" -> "Play" -> Region)
-                # Strictly disabled during active match gameplay to prevent any false-positive clicks!
-                if AR_ENABLED and not is_active_gameplay and (time.monotonic() - match_start_time > 4.0):
-                    menu_res = menu_detector.detect(frame)
+                # 0b. Menu & Match End Navigation ("Run over"/"You fell..." -> "Back to menu" -> "Play" -> Region)
+                if AR_ENABLED and (time.monotonic() - match_start_time > 4.0):
+                    candidate_menu = menu_detector.detect(frame)
+                    if candidate_menu.screen_type == MenuScreenType.RUN_OVER or (not is_active_gameplay):
+                        menu_res = candidate_menu
                     if menu_res.screen_type != MenuScreenType.NONE and menu_res.click_point:
                         set_pause(True)
                         set_rift_movement(False)

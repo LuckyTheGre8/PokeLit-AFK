@@ -244,24 +244,32 @@ class WindowInput:
         if not user32.IsWindow(self.target_hwnd):
             self.target_hwnd = self._resolve_target_hwnd()
         dest_hwnd = self.target_hwnd or self.hwnd
-        lparam = (int(client_y) << 16) | (int(client_x) & 0xFFFF)
+        self_lparam = (int(client_y) << 16) | (int(client_x) & 0xFFFF)
+
+        # Convert self.hwnd client coords -> dest_hwnd client coords so clicks land accurately in both windowed & fullscreen modes
+        dest_lparam = self_lparam
+        if dest_hwnd != self.hwnd and user32.IsWindow(dest_hwnd):
+            pt = wintypes.POINT(int(client_x), int(client_y))
+            if user32.ClientToScreen(self.hwnd, ctypes.byref(pt)) and user32.ScreenToClient(dest_hwnd, ctypes.byref(pt)):
+                if pt.x >= 0 and pt.y >= 0:
+                    dest_lparam = (int(pt.y) << 16) | (int(pt.x) & 0xFFFF)
 
         for i in range(max(1, count)):
             if i > 0:
                 time.sleep(0.06)
             # Send WM_MOUSEMOVE so Chromium and Canvas hit-testing update cursor location
-            user32.PostMessageW(dest_hwnd, WM_MOUSEMOVE, 0x0000, lparam)
+            user32.PostMessageW(dest_hwnd, WM_MOUSEMOVE, 0x0000, dest_lparam)
             if dest_hwnd != self.hwnd and user32.IsWindow(self.hwnd):
-                user32.PostMessageW(self.hwnd, WM_MOUSEMOVE, 0x0000, lparam)
+                user32.PostMessageW(self.hwnd, WM_MOUSEMOVE, 0x0000, self_lparam)
             time.sleep(0.02)
 
             # Send WM_LBUTTONDOWN (MK_LBUTTON = 0x0001)
-            user32.PostMessageW(dest_hwnd, WM_LBUTTONDOWN, 0x0001, lparam)
+            user32.PostMessageW(dest_hwnd, WM_LBUTTONDOWN, 0x0001, dest_lparam)
             if dest_hwnd != self.hwnd and user32.IsWindow(self.hwnd):
-                user32.PostMessageW(self.hwnd, WM_LBUTTONDOWN, 0x0001, lparam)
+                user32.PostMessageW(self.hwnd, WM_LBUTTONDOWN, 0x0001, self_lparam)
             time.sleep(0.08)
 
             # Send WM_LBUTTONUP
-            user32.PostMessageW(dest_hwnd, WM_LBUTTONUP, 0x0000, lparam)
+            user32.PostMessageW(dest_hwnd, WM_LBUTTONUP, 0x0000, dest_lparam)
             if dest_hwnd != self.hwnd and user32.IsWindow(self.hwnd):
-                user32.PostMessageW(self.hwnd, WM_LBUTTONUP, 0x0000, lparam)
+                user32.PostMessageW(self.hwnd, WM_LBUTTONUP, 0x0000, self_lparam)

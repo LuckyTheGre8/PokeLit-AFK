@@ -262,7 +262,7 @@ class LevelUpDetector:
         scores["kecleon_title"] = score_kecleon
         scores["leave_btn"] = score_leave
 
-        is_kecleon = (score_kecleon >= 0.70) or (score_leave >= 0.72)
+        is_kecleon = (score_kecleon >= 0.70) or (score_leave >= 0.80 and score_kecleon >= 0.55)
 
         if is_kecleon:
             conf = max(score_kecleon, score_leave)
@@ -813,7 +813,9 @@ class MenuNavigatorDetector:
 
         self.tpl_run_over = self._load_template("run_over_title.png")
         self.tpl_btn_menu = self._load_template("back_to_menu_btn.png")
+        self.tpl_btn_menu_v2 = self._load_template("back_to_menu_btn_v2.png")
         self.tpl_play = self._load_template("main_menu_play_btn.png")
+        self.tpl_play_v2 = self._load_template("main_menu_play_btn_v2.png")
         self.tpl_region = self._load_template("choose_region_title.png")
         self.tpl_kanto = self._load_template("kanto_word.png")
         self.tpl_johto = self._load_template("johto_word.png")
@@ -846,14 +848,26 @@ class MenuNavigatorDetector:
                 res_ro = cv2.matchTemplate(roi_ro, self.tpl_run_over, cv2.TM_CCOEFF_NORMED)
                 val_ro = float(cv2.minMaxLoc(res_ro)[1])
 
-        if self.tpl_btn_menu is not None:
-            roi_bm = norm[400:635, 360:540]
-            if roi_bm.shape[0] >= self.tpl_btn_menu.shape[0] and roi_bm.shape[1] >= self.tpl_btn_menu.shape[1]:
-                res_bm = cv2.matchTemplate(roi_bm, self.tpl_btn_menu, cv2.TM_CCOEFF_NORMED)
-                min_bm, max_bm, _, loc_bm = cv2.minMaxLoc(res_bm)
-                val_bm = float(max_bm)
-                if val_bm >= 0.70:
-                    click_pt = (360 + loc_bm[0] + self.tpl_btn_menu.shape[1] // 2, 400 + loc_bm[1] + self.tpl_btn_menu.shape[0] // 2)
+        # Match "Back to menu" button across both left-aligned (legacy Run Over) and centered ("You fell...") layouts
+        roi_bm_y1 = 400
+        roi_bm_y2 = min(target_h, 660)
+        roi_bm_x1 = 340
+        roi_bm_x2 = 680
+        roi_bm = norm[roi_bm_y1:roi_bm_y2, roi_bm_x1:roi_bm_x2]
+        for tpl_bm in (self.tpl_btn_menu, self.tpl_btn_menu_v2):
+            if tpl_bm is None:
+                continue
+            if roi_bm.shape[0] >= tpl_bm.shape[0] and roi_bm.shape[1] >= tpl_bm.shape[1]:
+                res_bm = cv2.matchTemplate(roi_bm, tpl_bm, cv2.TM_CCOEFF_NORMED)
+                _, max_bm, _, loc_bm = cv2.minMaxLoc(res_bm)
+                score_bm = float(max_bm)
+                if score_bm > val_bm:
+                    val_bm = score_bm
+                    if val_bm >= 0.70:
+                        click_pt = (
+                            roi_bm_x1 + loc_bm[0] + tpl_bm.shape[1] // 2,
+                            roi_bm_y1 + loc_bm[1] + tpl_bm.shape[0] // 2,
+                        )
 
         if val_ro >= 0.70 or val_bm >= 0.70:
             conf = max(val_ro, val_bm)
@@ -897,9 +911,25 @@ class MenuNavigatorDetector:
                                 click_pt = (180 + loc_kt[0] + 20, 180 + loc_kt[1] - 5)
                     return MenuDetectionResult(screen_type=MenuScreenType.CHOOSE_REGION, click_point=click_pt, confidence=round(val_reg, 4))
 
-        # 3. Main Menu (Play button -> Click "Play")
-        if self.tpl_play is not None:
-            roi_pl = norm[400:560, 360:660]
+        # 3. Main Menu (Play button -> Click yellow "Play", never the blue "Event" half)
+        # First check whether the split yellow "Play" / blue "Event" layout is active (cyan/blue pixels on right half)
+        has_blue_event_half = False
+        if target_h >= 520:
+            roi_ev = norm[465:515, 520:630]
+            hsv_ev = cv2.cvtColor(roi_ev, cv2.COLOR_BGR2HSV)
+            cyan_pixels = int(
+                np.sum(
+                    (hsv_ev[:, :, 0] >= 75)
+                    & (hsv_ev[:, :, 0] <= 110)
+                    & (hsv_ev[:, :, 1] >= 60)
+                    & (hsv_ev[:, :, 2] >= 140)
+                )
+            )
+            has_blue_event_half = cyan_pixels >= 400
+
+        # 3a. Legacy full-width yellow Play button (only when no blue Event half is present)
+        if not has_blue_event_half and self.tpl_play is not None:
+            roi_pl = norm[400:min(target_h, 560), 360:660]
             if roi_pl.shape[0] >= self.tpl_play.shape[0] and roi_pl.shape[1] >= self.tpl_play.shape[1]:
                 res_pl = cv2.matchTemplate(roi_pl, self.tpl_play, cv2.TM_CCOEFF_NORMED)
                 val_pl = float(cv2.minMaxLoc(res_pl)[1])
@@ -907,6 +937,20 @@ class MenuNavigatorDetector:
                     loc_pl = cv2.minMaxLoc(res_pl)[3]
                     click_pt = (360 + loc_pl[0] + self.tpl_play.shape[1] // 2, 400 + loc_pl[1] + self.tpl_play.shape[0] // 2)
                     return MenuDetectionResult(screen_type=MenuScreenType.MAIN_MENU, click_point=click_pt, confidence=round(val_pl, 4))
+
+        # 3b. Split Play/Event button -> Match ONLY the left yellow "Play" half (x: 340..560, strictly left of blue Event)
+        if self.tpl_play_v2 is not None:
+            roi_pl2 = norm[400:min(target_h, 560), 340:560]
+            if roi_pl2.shape[0] >= self.tpl_play_v2.shape[0] and roi_pl2.shape[1] >= self.tpl_play_v2.shape[1]:
+                res_pl2 = cv2.matchTemplate(roi_pl2, self.tpl_play_v2, cv2.TM_CCOEFF_NORMED)
+                _, max_pl2, _, loc_pl2 = cv2.minMaxLoc(res_pl2)
+                val_pl2 = float(max_pl2)
+                if val_pl2 >= 0.70:
+                    click_pt = (
+                        340 + loc_pl2[0] + self.tpl_play_v2.shape[1] // 2,
+                        400 + loc_pl2[1] + self.tpl_play_v2.shape[0] // 2,
+                    )
+                    return MenuDetectionResult(screen_type=MenuScreenType.MAIN_MENU, click_point=click_pt, confidence=round(val_pl2, 4))
 
         # 4. Stray Sub-Menu / Modal Dialog (Gacha menu, Mega page, Upgrades, etc.) -> Click "Back"
         if self.tpl_modal_back is not None:
