@@ -6,7 +6,12 @@
     "focus_flick_on_select": false
   },
   "movement": {
-    "keys": ["w", "a", "s", "d"],
+    "keys": [
+      "w",
+      "a",
+      "s",
+      "d"
+    ],
     "min_hold_seconds": 0.8,
     "max_hold_seconds": 2.2,
     "repeat_interval_seconds": 0.035,
@@ -38,7 +43,7 @@
   },
   "auto_restart": {
     "enabled": true,
-    "region": "hoenn",
+    "region": "sinnoh",
     "delay_between_clicks_seconds": 3.0,
     "pre_click_settle_seconds": 1.2,
     "post_click_delay_seconds": 3.0,

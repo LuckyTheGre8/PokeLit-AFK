@@ -14,6 +14,11 @@ from level_detector import (
     ModalType,
     PerkSelector,
     RiftDetector,
+    REGIONS_CATALOG,
+    REGION_ALIASES,
+    normalize_region,
+    get_region_display_name,
+    get_region_num,
 )
 from spatial_navigator import SpatialNavigator
 
@@ -43,6 +48,7 @@ IMG_RUN_OVER_TALL = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-815
 IMG_CHOOSE_REGION = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794254326963_916ca9c5.jpg")
 IMG_MAIN_MENU = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794254326996_f5d1b329.jpg")
 IMG_KECLEON = Path(r"C:/Users/lucky/.gemini/antigravity/brain/4afac521-6aeb-42ab-a2ca-d5e2e53665b3/.user_uploaded/media_1794499814321_06653558.jpg")
+IMG_REGION_MODAL_NEW = Path(r"C:/Users/lucky/.gemini/antigravity/brain/4afac521-6aeb-42ab-a2ca-d5e2e53665b3/.user_uploaded/media_1795336945316_6729c581.jpg")
 
 
 def test_full_detection_suite():
@@ -609,8 +615,72 @@ def test_full_detection_suite():
         )
         assert m_split.confidence >= 0.90, f"Confidence {m_split.confidence} too low on new yellow Play button!"
 
+    # 37. Dynamic Region Selection (All 10 Regions, Number & Name Normalization, Config Persistence, and Sinnoh Modal Selection)
+    assert len(REGIONS_CATALOG) == 10, f"Expected 10 regions in catalog, found {len(REGIONS_CATALOG)}"
+    for num, entry in REGIONS_CATALOG.items():
+        assert 1 <= num <= 10, f"Invalid region number: {num}"
+        assert "key" in entry and "name" in entry and "click" in entry and "template" in entry
+        tpl_path = Path("templates") / entry["template"]
+        assert tpl_path.exists(), f"Missing template file for {entry['name']}: {tpl_path}"
+
+    # Normalization tests
+    assert normalize_region("1") == "kanto"
+    assert normalize_region("4") == "sinnoh"
+    assert normalize_region("sinnoh") == "sinnoh"
+    assert normalize_region("Sinnoh") == "sinnoh"
+    assert normalize_region("10") == "origin"
+    assert normalize_region("hall of origin") == "origin"
+    assert normalize_region("jhoto") == "johto"
+    assert normalize_region("hoenn") == "hoenn"
+    assert normalize_region("invalid_xyz") == "hoenn"
+    assert get_region_display_name("sinnoh") == "Sinnoh"
+    assert get_region_display_name("origin") == "Hall of Origin"
+    assert get_region_num("sinnoh") == 4
+    assert get_region_num("hoenn") == 3
+    assert get_region_num("origin") == 10
+
+    # Test set_target_region functionality
+    import perk_selector
+    prev_region = perk_selector.AR_REGION
+    perk_selector.set_target_region("4", persist_to_config=False)
+    assert perk_selector.AR_REGION == "sinnoh", f"Expected sinnoh, got {perk_selector.AR_REGION}"
+    assert perk_selector.menu_detector.target_region == "sinnoh", "menu_detector target_region not updated!"
+
+    # Test Sinnoh (#4) detection on the user's uploaded "Choose the region" screenshot
+    if IMG_REGION_MODAL_NEW.exists():
+        im_modal = cv2.imread(str(IMG_REGION_MODAL_NEW))
+        assert im_modal is not None, "Failed to load user region modal image"
+        m_sinnoh = perk_selector.menu_detector.detect(im_modal)
+        print(f"[TEST 37] Sinnoh Detection on User Modal: type={m_sinnoh.screen_type.value}, click={m_sinnoh.click_point}, conf={m_sinnoh.confidence}")
+        assert m_sinnoh.screen_type == MenuScreenType.CHOOSE_REGION, f"Expected CHOOSE_REGION, got {m_sinnoh.screen_type}"
+        assert m_sinnoh.click_point is not None
+        # Sinnoh card bbox: x in [574, 680], y in [204, 351]
+        assert 574 <= m_sinnoh.click_point[0] <= 680 and 204 <= m_sinnoh.click_point[1] <= 351, (
+            f"Sinnoh click point {m_sinnoh.click_point} is outside the Sinnoh card [574..680, 204..351]!"
+        )
+
+        # Test other regions on the same modal
+        for test_reg, (exp_x_min, exp_x_max, exp_y_min, exp_y_max) in [
+            ("kanto", (214, 319, 204, 351)),
+            ("unova", (694, 800, 204, 351)),
+            ("kalos", (214, 319, 362, 509)),
+            ("alola", (334, 440, 362, 509)),
+            ("origin", (694, 800, 362, 509)),
+        ]:
+            det_test = MenuNavigatorDetector(target_region=test_reg)
+            res_test = det_test.detect(im_modal)
+            assert res_test.screen_type == MenuScreenType.CHOOSE_REGION
+            assert res_test.click_point is not None
+            assert exp_x_min <= res_test.click_point[0] <= exp_x_max and exp_y_min <= res_test.click_point[1] <= exp_y_max, (
+                f"{test_reg} click {res_test.click_point} outside card!"
+            )
+        print("[TEST 37] All 10 Region Selector & Sinnoh Loop Selection: Verified!")
+
+    # Restore previous region
+    perk_selector.set_target_region(prev_region, persist_to_config=False)
+
     print("\n================================================================================")
-    print("ALL 40 VERIFICATION TESTS (GAMEPLAY, MODALS, RIFTS, DYNAMIC ARROW, MEMORY, UNSTUCK, TIMER, AUTO LEVEL, RESTART, SPATIAL AI, IPC EXPIRATION, TOP EDGE RIFT, MOTION TRACKER LIFECYCLE, RIFT OBSTACLE BYPASS, MENU CLICK THROTTLING, KECLEON SHOP EXIT 4, CURSOR HIJACK ELIMINATION, PLAY BUTTON INPUT PIPELINE, YOU FELL BACK-TO-MENU, SPLIT YELLOW PLAY BUTTON) PASSED!")
+    print("ALL 41 VERIFICATION TESTS (GAMEPLAY, MODALS, RIFTS, DYNAMIC ARROW, MEMORY, UNSTUCK, TIMER, AUTO LEVEL, RESTART, SPATIAL AI, IPC EXPIRATION, TOP EDGE RIFT, MOTION TRACKER LIFECYCLE, RIFT OBSTACLE BYPASS, MENU CLICK THROTTLING, KECLEON SHOP EXIT 4, CURSOR HIJACK ELIMINATION, PLAY BUTTON INPUT PIPELINE, YOU FELL BACK-TO-MENU, SPLIT YELLOW PLAY BUTTON, DYNAMIC 10-REGION SELECTOR & SINNOH LOOP) PASSED!")
     print("================================================================================")
 
 

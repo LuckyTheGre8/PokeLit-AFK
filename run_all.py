@@ -33,13 +33,27 @@ def main():
         default=None,
         help="Perk choice override ('1', '2', '3', 'random', 'cycle')",
     )
+    parser.add_argument(
+        "--region",
+        type=str,
+        default=None,
+        help="Region override (1-10 or region name, e.g. '4', 'sinnoh', 'hoenn')",
+    )
     args = parser.parse_args()
 
     if args.choice:
         perk_selector.selector.strategy = args.choice
 
+    if args.region:
+        perk_selector.set_target_region(args.region, persist_to_config=True)
+    else:
+        perk_selector.prompt_region_selection(perk_selector.AR_REGION)
+
     hwnd = find_target_window("pokelit")
     pattern_str = " -> ".join(k.upper() for k in random_movement.KEYS) + " -> " + random_movement.KEYS[0].upper()
+
+    cur_region_num = perk_selector.get_region_num(perk_selector.AR_REGION)
+    cur_region_name = perk_selector.get_region_display_name(perk_selector.AR_REGION)
 
     print("==================================================")
     print("      PokéLit Full AFK Bot (Targeted Stream)      ")
@@ -51,6 +65,7 @@ def main():
         print("                  -> You can use your laptop in the foreground!")
     else:
         print("Targeted Window:  Not found (using global fallback)")
+    print(f"Target Region:    [{cur_region_num}] {cur_region_name} (Loop Selection)")
     print(f"Movement:         {pattern_str} ({random_movement.MIN_SECONDS}s-{random_movement.MAX_SECONDS}s)")
     print(f"Perk Strategy:    [{perk_selector.selector.strategy.upper()}] (Presses 1, 2, or 3)")
     print("Controls:")

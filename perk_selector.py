@@ -42,6 +42,8 @@ import pyautogui
 from pynput import keyboard
 
 from level_detector import (
+    REGIONS_CATALOG,
+    REGION_ALIASES,
     AutoVigorDetector,
     AutoVigorResult,
     DetectionResult,
@@ -56,6 +58,9 @@ from level_detector import (
     RiftDetector,
     RiftResult,
     ScreenGrabber,
+    get_region_display_name,
+    get_region_num,
+    normalize_region,
 )
 from spatial_navigator import SpatialNavigator, SpatialNavResult
 from window_stream import WindowCapture, WindowInput, find_target_window
@@ -155,11 +160,7 @@ AL_ENABLED = AL_CFG.get("enabled", False)
 
 AR_CFG = CONFIG.get("auto_restart", {})
 AR_ENABLED = AR_CFG.get("enabled", True)
-AR_REGION = str(AR_CFG.get("region", "hoenn")).lower()
-if AR_REGION in ("jhoto", "johto"):
-    AR_REGION = "johto"
-elif AR_REGION in ("hoenn", "hoen"):
-    AR_REGION = "hoenn"
+AR_REGION = normalize_region(AR_CFG.get("region", "hoenn"))
 AR_DELAY = float(AR_CFG.get("delay_between_clicks_seconds", AR_CFG.get("post_click_delay_seconds", 3.0)))
 AR_PRE_CLICK_SETTLE = float(AR_CFG.get("pre_click_settle_seconds", 1.2))
 AR_RO_COOLDOWN = float(AR_CFG.get("run_over_cooldown_seconds", 6.0))
@@ -177,6 +178,67 @@ auto_level_detector = AutoVigorDetector()
 auto_vigor_detector = auto_level_detector
 menu_detector = MenuNavigatorDetector(target_region=AR_REGION)
 spatial_nav = SpatialNavigator()
+
+
+def set_target_region(region_input: str | int, persist_to_config: bool = True) -> str:
+    """Set the target region for auto-restart across the bot session and optionally persist to config.json."""
+    global AR_REGION, menu_detector
+    canon = normalize_region(region_input)
+    AR_REGION = canon
+    if menu_detector is not None:
+        menu_detector.target_region = canon
+    if persist_to_config:
+        try:
+            cfg_path = Path(__file__).resolve().parent / "config.json"
+            if cfg_path.exists():
+                with open(cfg_path, "r", encoding="utf-8") as f:
+                    cfg_data = json.load(f)
+                if "auto_restart" not in cfg_data:
+                    cfg_data["auto_restart"] = {}
+                cfg_data["auto_restart"]["region"] = canon
+                with open(cfg_path, "w", encoding="utf-8") as f:
+                    json.dump(cfg_data, f, indent=2)
+        except Exception as e:
+            print(f"[WARN] Failed to persist region '{canon}' to config.json: {e}")
+    return canon
+
+
+def prompt_region_selection(default_region: str | None = None) -> str:
+    """Displays the numbered region list (1-10) and prompts the user to select their desired region."""
+    cur_region = normalize_region(default_region or AR_REGION)
+    cur_num = get_region_num(cur_region)
+    cur_name = get_region_display_name(cur_region)
+
+    print("\n" + "=" * 50)
+    print("           PokéLit Region Selection")
+    print("=" * 50)
+    print("Available Regions:")
+    for num, entry in sorted(REGIONS_CATALOG.items()):
+        marker = " (Current)" if entry["key"] == cur_region else ""
+        print(f"  [{num:2d}] {entry['name']:15s} ({entry['gen']}){marker}")
+    print("-" * 50)
+    print(f"Current Region: [{cur_num}] {cur_name}")
+
+    if not sys.stdin.isatty():
+        print(f"Non-interactive session detected; using: [{cur_num}] {cur_name}")
+        print("=" * 50 + "\n")
+        return cur_region
+
+    try:
+        user_input = input(f"Enter region number (1-10) or name [Default: {cur_num}]: ").strip()
+        if not user_input:
+            chosen = cur_region
+        else:
+            chosen = normalize_region(user_input)
+    except (EOFError, KeyboardInterrupt):
+        chosen = cur_region
+
+    set_target_region(chosen, persist_to_config=True)
+    num_chosen = get_region_num(chosen)
+    name_chosen = get_region_display_name(chosen)
+    print(f"-> Selected Region: [{num_chosen}] {name_chosen} (persisted for all runs)")
+    print("=" * 50 + "\n")
+    return chosen
 
 match_start_time: float = time.monotonic()
 auto_level_confirmed_on: bool = False
@@ -356,7 +418,8 @@ def monitor_loop() -> None:
     print(f"Item Strategy:     2-Options -> [{selector.item_choice_2}] | 3-Options -> [{selector.item_choice_3}]")
     print(f"Rift Navigation:   {'ENABLED (Auto-steers to purple arrow/tear)' if RIFT_ENABLED else 'DISABLED'}")
     print(f"Auto Level:        {'ENABLED (Turns ON once at start of level)' if AL_ENABLED else 'DISABLED'}")
-    print(f"Auto Restart:      {'ENABLED (Back to menu -> Play -> ' + AR_REGION.capitalize() + ')' if AR_ENABLED else 'DISABLED'}")
+    reg_disp = get_region_display_name(AR_REGION)
+    print(f"Auto Restart:      {'ENABLED (Back to menu -> Play -> ' + reg_disp + ')' if AR_ENABLED else 'DISABLED'}")
     print("Press [F9] to stop | [F7] for test scan.\n")
 
     modals_handled = 0
@@ -518,10 +581,11 @@ def monitor_loop() -> None:
                             fresh_menu = menu_detector.detect(fresh_frame)
                             click_pt = fresh_menu.click_point if (fresh_menu.screen_type == MenuScreenType.CHOOSE_REGION and fresh_menu.click_point) else menu_res.click_point
 
-                            print(f" -> Selecting '{AR_REGION.capitalize()}' region at {click_pt}...")
+                            reg_disp = get_region_display_name(AR_REGION)
+                            print(f" -> Selecting '{reg_disp}' region at {click_pt}...")
                             execute_click(click_pt[0], click_pt[1])
                             last_menu_click_time = time.monotonic()
-                            print(f" -> Starting new match in {AR_REGION.capitalize()} (waiting 3.0s)...")
+                            print(f" -> Starting new match in {reg_disp} (waiting 3.0s)...")
                             time.sleep(3.0)
 
                             # Reset match start time and Auto Level flag for the fresh game
@@ -804,14 +868,28 @@ def main() -> None:
         default=None,
         help="Perk choice override ('1', '2', '3', 'random', 'cycle')",
     )
+    parser.add_argument(
+        "--region",
+        type=str,
+        default=None,
+        help="Region override (1-10 or name, e.g. '4', 'sinnoh', 'hoenn')",
+    )
     args = parser.parse_args()
 
     if args.choice:
         selector.strategy = args.choice
 
+    if args.region:
+        set_target_region(args.region, persist_to_config=True)
+    else:
+        prompt_region_selection(AR_REGION)
+
     set_pause(False)
     set_rift_movement(False)
     _, _, hwnd = resolve_capture_and_input()
+
+    cur_num = get_region_num(AR_REGION)
+    cur_name = get_region_display_name(AR_REGION)
 
     print("==================================================")
     print("   PokéLit Vision Monitor (Modals + Rift Portal)  ")
@@ -820,6 +898,7 @@ def main() -> None:
         print(f"Targeted Window:  HWND {hwnd:#x} (Background Stream Locked)")
     else:
         print("Targeted Window:  Not locked (using desktop capture)")
+    print(f"Target Region:    [{cur_num}] {cur_name} (Loop Selection)")
     print(f"Level-Up Choice:  Option [{selector.strategy.upper()}] (taps 1, 2, or 3)")
     print(f"Item 2-Options:   Option [{selector.item_choice_2}] (always selects 2)")
     print(f"Item 3-Options:   Option [{selector.item_choice_3}] (always selects 3)")

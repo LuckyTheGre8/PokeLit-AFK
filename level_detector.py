@@ -798,18 +798,72 @@ class AutoVigorDetector:
 AutoLevelDetector = AutoVigorDetector
 
 
+REGIONS_CATALOG: dict[int, dict[str, Any]] = {
+    1: {"key": "kanto", "name": "Kanto", "gen": "Generation 1", "click": (266, 277), "template": "kanto_word.png", "row": 1, "col": 1},
+    2: {"key": "johto", "name": "Johto", "gen": "Generation 2", "click": (387, 277), "template": "johto_word.png", "row": 1, "col": 2},
+    3: {"key": "hoenn", "name": "Hoenn", "gen": "Generation 3", "click": (507, 277), "template": "hoenn_word.png", "row": 1, "col": 3},
+    4: {"key": "sinnoh", "name": "Sinnoh", "gen": "Generation 4", "click": (627, 277), "template": "sinnoh_word.png", "row": 1, "col": 4},
+    5: {"key": "unova", "name": "Unova", "gen": "Generation 5", "click": (747, 277), "template": "unova_word.png", "row": 1, "col": 5},
+    6: {"key": "kalos", "name": "Kalos", "gen": "Generation 6", "click": (266, 435), "template": "kalos_word.png", "row": 2, "col": 1},
+    7: {"key": "alola", "name": "Alola", "gen": "Generation 7", "click": (386, 435), "template": "alola_word.png", "row": 2, "col": 2},
+    8: {"key": "galar", "name": "Galar", "gen": "Generation 8", "click": (506, 435), "template": "galar_word.png", "row": 2, "col": 3},
+    9: {"key": "paldea", "name": "Paldea", "gen": "Generation 9", "click": (626, 435), "template": "paldea_word.png", "row": 2, "col": 4},
+    10: {"key": "origin", "name": "Hall of Origin", "gen": "Endless", "click": (746, 435), "template": "origin_word.png", "row": 2, "col": 5},
+}
+
+REGION_ALIASES: dict[str, str] = {
+    "1": "kanto", "kanto": "kanto", "gen1": "kanto", "gen 1": "kanto",
+    "2": "johto", "johto": "johto", "jhoto": "johto", "gen2": "johto", "gen 2": "johto",
+    "3": "hoenn", "hoenn": "hoenn", "hoen": "hoenn", "gen3": "hoenn", "gen 3": "hoenn",
+    "4": "sinnoh", "sinnoh": "sinnoh", "sinoh": "sinnoh", "gen4": "sinnoh", "gen 4": "sinnoh",
+    "5": "unova", "unova": "unova", "gen5": "unova", "gen 5": "unova",
+    "6": "kalos", "kalos": "kalos", "gen6": "kalos", "gen 6": "kalos",
+    "7": "alola", "alola": "alola", "gen7": "alola", "gen 7": "alola",
+    "8": "galar", "galar": "galar", "gen8": "galar", "gen 8": "galar",
+    "9": "paldea", "paldea": "paldea", "gen9": "paldea", "gen 9": "paldea",
+    "10": "origin", "origin": "origin", "hall of origin": "origin", "hall": "origin", "endless": "origin", "gen10": "origin",
+}
+
+
+def normalize_region(region_input: str | int | None) -> str:
+    """Normalize any region number (1-10) or name/alias to canonical region key."""
+    if region_input is None:
+        return "hoenn"
+    s = str(region_input).strip().lower()
+    if s in REGION_ALIASES:
+        return REGION_ALIASES[s]
+    for entry in REGIONS_CATALOG.values():
+        if entry["key"] == s:
+            return s
+    return "hoenn"
+
+
+def get_region_display_name(region_key: str | int) -> str:
+    """Get the human-readable display name for a region key or number."""
+    canon = normalize_region(region_key)
+    for entry in REGIONS_CATALOG.values():
+        if entry["key"] == canon:
+            return entry["name"]
+    return canon.capitalize()
+
+
+def get_region_num(region_key: str | int) -> int:
+    """Get the 1-based region number (1-10) for a region key or number."""
+    canon = normalize_region(region_key)
+    for num, entry in REGIONS_CATALOG.items():
+        if entry["key"] == canon:
+            return num
+    return 3
+
+
 class MenuNavigatorDetector:
     """Detects end-of-match Run Over screen, Main Menu Play button, and Choose Region modal."""
 
-    def __init__(self, templates_dir: Path | str | None = None, target_region: str = "hoenn") -> None:
+    def __init__(self, templates_dir: Path | str | None = None, target_region: str | int = "hoenn") -> None:
         if templates_dir is None:
             templates_dir = Path(__file__).resolve().parent / "templates"
         self.templates_dir = Path(templates_dir)
-        self.target_region = target_region.lower()
-        if self.target_region in ("jhoto", "johto"):
-            self.target_region = "johto"
-        elif self.target_region in ("hoenn", "hoen"):
-            self.target_region = "hoenn"
+        self.target_region = normalize_region(target_region)
 
         self.tpl_run_over = self._load_template("run_over_title.png")
         self.tpl_btn_menu = self._load_template("back_to_menu_btn.png")
@@ -817,10 +871,19 @@ class MenuNavigatorDetector:
         self.tpl_play = self._load_template("main_menu_play_btn.png")
         self.tpl_play_v2 = self._load_template("main_menu_play_btn_v2.png")
         self.tpl_region = self._load_template("choose_region_title.png")
-        self.tpl_kanto = self._load_template("kanto_word.png")
-        self.tpl_johto = self._load_template("johto_word.png")
-        self.tpl_hoenn = self._load_template("hoenn_word.png")
         self.tpl_modal_back = self._load_template("modal_back_btn.png")
+
+        # Load region word templates for all 10 regions
+        self.region_templates: dict[str, np.ndarray] = {}
+        for entry in REGIONS_CATALOG.values():
+            tpl = self._load_template(entry["template"])
+            if tpl is not None:
+                self.region_templates[entry["key"]] = tpl
+
+        # Backwards compatibility attributes
+        self.tpl_kanto = self.region_templates.get("kanto")
+        self.tpl_johto = self.region_templates.get("johto")
+        self.tpl_hoenn = self.region_templates.get("hoenn")
 
     def _load_template(self, filename: str) -> np.ndarray | None:
         path = self.templates_dir / filename
@@ -873,42 +936,38 @@ class MenuNavigatorDetector:
             conf = max(val_ro, val_bm)
             return MenuDetectionResult(screen_type=MenuScreenType.RUN_OVER, click_point=click_pt, confidence=round(conf, 4))
 
-        # 2. "Choose the region" modal -> Click target region card (e.g. Johto or Kanto)
+        # 2. "Choose the region" modal -> Click target region card (1..10)
         if self.tpl_region is not None:
             roi_reg = norm[120:220, 180:440]
             if roi_reg.shape[0] >= self.tpl_region.shape[0] and roi_reg.shape[1] >= self.tpl_region.shape[1]:
                 res_reg = cv2.matchTemplate(roi_reg, self.tpl_region, cv2.TM_CCOEFF_NORMED)
                 val_reg = float(cv2.minMaxLoc(res_reg)[1])
                 if val_reg >= 0.70:
-                    region = self.target_region.lower()
-                    if region in ("johto", "jhoto"):
-                        click_pt = (387, 277)  # Center of Johto card
-                        if self.tpl_johto is not None:
-                            roi_jh = norm[180:360, 310:460]
-                            if roi_jh.shape[0] >= self.tpl_johto.shape[0] and roi_jh.shape[1] >= self.tpl_johto.shape[1]:
-                                res_jh = cv2.matchTemplate(roi_jh, self.tpl_johto, cv2.TM_CCOEFF_NORMED)
-                                loc_jh = cv2.minMaxLoc(res_jh)[3]
-                                click_pt = (310 + loc_jh[0] + self.tpl_johto.shape[1] // 2, 180 + loc_jh[1] + self.tpl_johto.shape[0] // 2)
-                    elif region == "hoenn":
-                        click_pt = (507, 277)  # Center of Hoenn card
-                        if self.tpl_hoenn is not None:
-                            roi_hn = norm[180:360, 430:580]
-                            if roi_hn.shape[0] >= self.tpl_hoenn.shape[0] and roi_hn.shape[1] >= self.tpl_hoenn.shape[1]:
-                                res_hn = cv2.matchTemplate(roi_hn, self.tpl_hoenn, cv2.TM_CCOEFF_NORMED)
-                                loc_hn = cv2.minMaxLoc(res_hn)[3]
-                                click_pt = (430 + loc_hn[0] + self.tpl_hoenn.shape[1] // 2, 180 + loc_hn[1] + self.tpl_hoenn.shape[0] // 2)
-                    elif region == "sinnoh":
-                        click_pt = (627, 277)  # Center of Sinnoh card
-                    elif region == "unova":
-                        click_pt = (747, 277)  # Center of Unova card
-                    else:  # default to Kanto
-                        click_pt = (266, 277)  # Center of Kanto card
-                        if self.tpl_kanto is not None:
-                            roi_kt = norm[180:360, 180:340]
-                            if roi_kt.shape[0] >= self.tpl_kanto.shape[0] and roi_kt.shape[1] >= self.tpl_kanto.shape[1]:
-                                res_kt = cv2.matchTemplate(roi_kt, self.tpl_kanto, cv2.TM_CCOEFF_NORMED)
-                                loc_kt = cv2.minMaxLoc(res_kt)[3]
-                                click_pt = (180 + loc_kt[0] + 20, 180 + loc_kt[1] - 5)
+                    region = normalize_region(self.target_region)
+                    click_pt = (507, 277)  # default Hoenn center
+                    for entry in REGIONS_CATALOG.values():
+                        if entry["key"] == region:
+                            click_pt = entry["click"]
+                            row, col = entry["row"], entry["col"]
+                            y1 = 180 if row == 1 else 340
+                            y2 = 360 if row == 1 else 520
+                            x1 = 180 + (col - 1) * 120
+                            x2 = x1 + 150
+                            roi_card = norm[y1:y2, x1:x2]
+                            tpl_word = self.region_templates.get(entry["key"])
+                            if (
+                                tpl_word is not None
+                                and roi_card.shape[0] >= tpl_word.shape[0]
+                                and roi_card.shape[1] >= tpl_word.shape[1]
+                            ):
+                                res_w = cv2.matchTemplate(roi_card, tpl_word, cv2.TM_CCOEFF_NORMED)
+                                max_w, loc_w = float(cv2.minMaxLoc(res_w)[1]), cv2.minMaxLoc(res_w)[3]
+                                if max_w >= 0.70:
+                                    click_pt = (
+                                        x1 + loc_w[0] + tpl_word.shape[1] // 2,
+                                        y1 + loc_w[1] + tpl_word.shape[0] // 2,
+                                    )
+                            break
                     return MenuDetectionResult(screen_type=MenuScreenType.CHOOSE_REGION, click_point=click_pt, confidence=round(val_reg, 4))
 
         # 3. Main Menu (Play button -> Click yellow "Play", never the blue "Event" half)
