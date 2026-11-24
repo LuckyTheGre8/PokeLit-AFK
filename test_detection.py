@@ -751,8 +751,41 @@ def test_full_detection_suite():
         assert nav_post_pivot.mode == "rift_push" and "s" in nav_post_pivot.direction_keys
         print(f"[TEST 38g] Post-Channel Seamless Pivot to Queued Rift: mode={nav_post_pivot.mode}, keys={nav_post_pivot.direction_keys}")
 
+        # 38h. Multi-Frame Channeling Timeline Simulation
+        spatial_chest.reset()
+        t_sim = time.monotonic()
+        nav_t0 = spatial_chest.analyze(im_c3)
+        assert nav_t0.mode == "chest_channel" and len(nav_t0.direction_keys) == 0
+        spatial_chest.chest_channel_start = t_sim - 3.0
+        nav_t3 = spatial_chest.analyze(im_c3, rift_direction_keys=["w"], rift_angle=-90.0)
+        assert nav_t3.mode == "chest_channel" and len(nav_t3.direction_keys) == 0
+        spatial_chest.chest_channel_start = t_sim - 6.6
+        nav_t7 = spatial_chest.analyze(im_c4, rift_direction_keys=["w"], rift_angle=-90.0)
+        assert nav_t7.mode == "rift_push" and "w" in nav_t7.direction_keys
+        print("[TEST 38h] Multi-Frame Channeling Timeline Simulation: Verified!")
+
+        # 38i. Early Despawn Resolution (Chest disappears at 3.5s before 6.5s timeout)
+        spatial_chest.reset()
+        _ = spatial_chest.analyze(im_c3)
+        spatial_chest.chest_channel_start = t_sim - 3.5
+        nav_despawn = spatial_chest.analyze(im_c4)
+        assert nav_despawn.mode != "chest_channel" and spatial_chest.chest_state == "cooldown"
+        print("[TEST 38i] Early Despawn Auto-Recovery: Verified!")
+
+        # 38j. Cooldown Immunity against Residual Sparkle Noise
+        spatial_chest.chest_cooldown_until = time.monotonic() + 3.0
+        nav_cooldown = spatial_chest.analyze(im_c2)
+        assert nav_cooldown.mode != "chest_push"
+        print("[TEST 38j] Cooldown Immunity Against Residual Opening Noise: Verified!")
+
+        # 38k. High-DPI Resolution Scaling Invariance (2560x1600)
+        im_highdpi = cv2.resize(im_c2, (2560, 1600))
+        res_highdpi = chest_det.detect(im_highdpi)
+        assert res_highdpi.is_active and res_highdpi.mode == "onscreen_chest"
+        print(f"[TEST 38k] High-DPI (2560x1600) Chest Detection: mode={res_highdpi.mode}, target={res_highdpi.target_point}, keys={res_highdpi.direction_keys}")
+
     print("\n================================================================================")
-    print("ALL 42 VERIFICATION TESTS (GAMEPLAY, MODALS, RIFTS, DYNAMIC ARROW, MEMORY, UNSTUCK, TIMER, AUTO LEVEL, RESTART, SPATIAL AI, IPC EXPIRATION, TOP EDGE RIFT, MOTION TRACKER LIFECYCLE, RIFT OBSTACLE BYPASS, MENU CLICK THROTTLING, KECLEON SHOP EXIT 4, CURSOR HIJACK ELIMINATION, PLAY BUTTON INPUT PIPELINE, YOU FELL BACK-TO-MENU, SPLIT YELLOW PLAY BUTTON, DYNAMIC 10-REGION SELECTOR, SINNOH LOOP & CHEST NAVIGATION STATE MACHINE) PASSED!")
+    print("ALL 43 VERIFICATION TESTS (GAMEPLAY, MODALS, RIFTS, DYNAMIC ARROW, MEMORY, UNSTUCK, TIMER, AUTO LEVEL, RESTART, SPATIAL AI, IPC EXPIRATION, TOP EDGE RIFT, MOTION TRACKER LIFECYCLE, RIFT OBSTACLE BYPASS, MENU CLICK THROTTLING, KECLEON SHOP EXIT 4, CURSOR HIJACK ELIMINATION, PLAY BUTTON INPUT PIPELINE, YOU FELL BACK-TO-MENU, SPLIT YELLOW PLAY BUTTON, DYNAMIC 10-REGION SELECTOR, SINNOH LOOP & EXTENSIVE CHEST NAVIGATION SUITE) PASSED!")
     print("================================================================================")
 
 
