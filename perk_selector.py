@@ -46,6 +46,8 @@ from level_detector import (
     REGION_ALIASES,
     AutoVigorDetector,
     AutoVigorResult,
+    ChestDetector,
+    ChestResult,
     DetectionResult,
     GameTimerDetector,
     GameTimerResult,
@@ -178,6 +180,7 @@ auto_level_detector = AutoVigorDetector()
 auto_vigor_detector = auto_level_detector
 menu_detector = MenuNavigatorDetector(target_region=AR_REGION)
 spatial_nav = SpatialNavigator()
+chest_detector = ChestDetector()
 
 
 def set_target_region(region_input: str | int, persist_to_config: bool = True) -> str:
@@ -829,6 +832,9 @@ def manual_test_scan() -> None:
         if rift_res.is_active:
             print(f"  -> Steering Keys: {rift_res.direction_keys} (Angle: {rift_res.angle_deg}°, Target: {rift_res.target_point})")
 
+        chest_res = chest_detector.detect(frame)
+        print(f"Chest Status: active = {chest_res.is_active} (mode = {chest_res.mode}, target = {chest_res.target_point}, keys = {chest_res.direction_keys})")
+
         t_res = timer_detector.detect(frame)
         av_res = auto_vigor_detector.detect(frame)
         m_res = menu_detector.detect(frame)
@@ -903,6 +909,7 @@ def main() -> None:
     print(f"Item 2-Options:   Option [{selector.item_choice_2}] (always selects 2)")
     print(f"Item 3-Options:   Option [{selector.item_choice_3}] (always selects 3)")
     print(f"Rift Navigation:  {'Enabled (Auto-moves to purple arrow)' if RIFT_ENABLED else 'Disabled'}")
+    print(f"Chest Navigation: {'Enabled (Auto-steers & 6.5s stationary hold)' if CONFIG.get('chest_navigation', {}).get('enabled', True) else 'Disabled'}")
     print("Controls:")
     print("  [F8]  -> Start monitoring")
     print("  [F9]  -> Stop monitoring")
