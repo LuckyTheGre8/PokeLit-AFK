@@ -627,6 +627,18 @@ class ChestDetector:
             templates_dir = Path(__file__).resolve().parent / "templates"
         self.templates_dir = Path(templates_dir)
         self.conf_threshold = confidence_threshold
+        self.arrival_dist = 50.0
+
+        config_path = Path(__file__).resolve().parent / "config.json"
+        if config_path.exists():
+            try:
+                import json
+                with open(config_path, "r", encoding="utf-8") as f:
+                    cfg = json.load(f).get("chest_navigation", {})
+                self.conf_threshold = float(cfg.get("confidence_threshold", confidence_threshold))
+                self.arrival_dist = float(cfg.get("arrival_distance_px", 50.0))
+            except Exception:
+                pass
 
         self.tpl_tag = self._load_template("chest_tag.png")
         self.tpl_lock_badge = self._load_template("chest_lock_badge.png")
@@ -726,8 +738,8 @@ class ChestDetector:
             dist = float(np.hypot(cx - player_center[0], cy - player_center[1]))
             scores["distance_to_player"] = round(dist, 1)
 
-            # Within arrival radius (<= 50px) -> CHANNELING
-            if dist <= 50.0:
+            # Within arrival radius -> CHANNELING
+            if dist <= self.arrival_dist:
                 return ChestResult(
                     is_active=True,
                     mode="channeling",

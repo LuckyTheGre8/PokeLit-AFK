@@ -22,6 +22,7 @@ Implements real-time Computer Vision Potential Field navigation:
 from __future__ import annotations
 
 import math
+from pathlib import Path
 import time
 from dataclasses import dataclass, field
 import cv2
@@ -213,10 +214,23 @@ class SpatialNavigator:
         self.chest_hold_duration: float = 6.5
         self.chest_cooldown_until: float = 0.0
         self.chest_cooldown_seconds: float = 3.0
+        self.chest_arrival_dist: float = 50.0
         self.last_known_chest_keys: list[str] = []
         self.last_known_chest_angle: float | None = None
         self.last_chest_seen_time: float = 0.0
         self.chest_grace_period: float = 1.5
+
+        config_path = Path(__file__).resolve().parent / "config.json"
+        if config_path.exists():
+            try:
+                import json
+                with open(config_path, "r", encoding="utf-8") as f:
+                    cfg = json.load(f).get("chest_navigation", {})
+                self.chest_hold_duration = float(cfg.get("hold_still_seconds", 6.5))
+                self.chest_cooldown_seconds = float(cfg.get("cooldown_seconds", 3.0))
+                self.chest_arrival_dist = float(cfg.get("arrival_distance_px", 50.0))
+            except Exception:
+                pass
 
         # Sector unit vectors: (vx, vy)
         self.sector_vectors = {
@@ -607,7 +621,14 @@ class SpatialNavigator:
                 self.chest_state = "approach"
                 mode = "chest_push"
                 F_chest = np.zeros(2, dtype=np.float32)
-                if active_chest.angle_deg is not None:
+                if active_chest.target_point is not None:
+                    # Precise continuous vector pointing directly at chest center
+                    cdx = float(active_chest.target_point[0] - player_cx)
+                    cdy = float(active_chest.target_point[1] - player_cy)
+                    cdist = math.hypot(cdx, cdy)
+                    if cdist > 0:
+                        F_chest = np.array([cdx / cdist, cdy / cdist], dtype=np.float32)
+                elif active_chest.angle_deg is not None:
                     rad_c = math.radians(active_chest.angle_deg)
                     F_chest = np.array([math.cos(rad_c), math.sin(rad_c)], dtype=np.float32)
                 elif active_chest.direction_keys:
@@ -620,7 +641,10 @@ class SpatialNavigator:
                 else:
                     F_chest = np.array([1.0, 0.0], dtype=np.float32)
 
+                # Prioritize chest approach vector with obstacle/threat tangential bypass
                 F_total = F_chest * 4.0 + F_bounds * 0.5
+                if max_threat >= self.danger_threshold:
+                    F_total += F_kite * 0.25
         elif max_threat >= self.danger_threshold:
             # Enemy swarm / boss proximity -> Evasion and Kiting
             mode = "kiting_evasion"
