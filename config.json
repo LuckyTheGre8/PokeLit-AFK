@@ -38,6 +38,14 @@
     "enabled": true,
     "confidence_threshold": 0.65
   },
+  "chest_navigation": {
+    "enabled": true,
+    "confidence_threshold": 0.65,
+    "hold_still_seconds": 6.5,
+    "arrival_distance_px": 50,
+    "finish_chest_before_rift": true,
+    "cooldown_seconds": 3.0
+  },
   "auto_level": {
     "enabled": false
   },

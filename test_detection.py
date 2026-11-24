@@ -6,6 +6,8 @@ import numpy as np
 from level_detector import (
     AutoLevelDetector,
     AutoVigorDetector,
+    ChestDetector,
+    ChestResult,
     GameTimerDetector,
     LevelUpDetector,
     MenuDetectionResult,
@@ -49,6 +51,11 @@ IMG_CHOOSE_REGION = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-815
 IMG_MAIN_MENU = Path(r"C:/Users/lucky/.gemini/antigravity/brain/f3fa9a92-8159-463b-9fc8-fe253c1b3159/.user_uploaded/media_1794254326996_f5d1b329.jpg")
 IMG_KECLEON = Path(r"C:/Users/lucky/.gemini/antigravity/brain/4afac521-6aeb-42ab-a2ca-d5e2e53665b3/.user_uploaded/media_1794499814321_06653558.jpg")
 IMG_REGION_MODAL_NEW = Path(r"C:/Users/lucky/.gemini/antigravity/brain/4afac521-6aeb-42ab-a2ca-d5e2e53665b3/.user_uploaded/media_1795336945316_6729c581.jpg")
+
+IMG_CHEST_1 = Path(r"C:/Users/lucky/.gemini/antigravity/brain/2df263a5-7e24-4214-80de-fa303bb78acd/.user_uploaded/media_1795482925562_b33974ff.jpg")
+IMG_CHEST_2 = Path(r"C:/Users/lucky/.gemini/antigravity/brain/2df263a5-7e24-4214-80de-fa303bb78acd/.user_uploaded/media_1795482935249_6b0d871d.jpg")
+IMG_CHEST_3 = Path(r"C:/Users/lucky/.gemini/antigravity/brain/2df263a5-7e24-4214-80de-fa303bb78acd/.user_uploaded/media_1795482944396_b16d6df2.jpg")
+IMG_CHEST_4 = Path(r"C:/Users/lucky/.gemini/antigravity/brain/2df263a5-7e24-4214-80de-fa303bb78acd/.user_uploaded/media_1795482954999_a1ac1a72.jpg")
 
 
 def test_full_detection_suite():
@@ -679,8 +686,73 @@ def test_full_detection_suite():
     # Restore previous region
     perk_selector.set_target_region(prev_region, persist_to_config=False)
 
+    # ---------------------------------------------------------
+    # TEST 38: Chest Navigation, Stationary Channeling & Priority Arbitration
+    # ---------------------------------------------------------
+    if IMG_CHEST_1.exists() and IMG_CHEST_2.exists() and IMG_CHEST_3.exists() and IMG_CHEST_4.exists():
+        im_c1 = cv2.imread(str(IMG_CHEST_1))
+        im_c2 = cv2.imread(str(IMG_CHEST_2))
+        im_c3 = cv2.imread(str(IMG_CHEST_3))
+        im_c4 = cv2.imread(str(IMG_CHEST_4))
+
+        chest_det = ChestDetector()
+        spatial_chest = SpatialNavigator()
+
+        # 38a. Off-Screen Chest HUD Badge & Directional Arrow
+        res_c1 = chest_det.detect(im_c1)
+        assert res_c1.is_active and res_c1.mode == "offscreen_badge"
+        assert "a" in res_c1.direction_keys
+        nav_c1 = spatial_chest.analyze(im_c1)
+        assert nav_c1.mode == "chest_push" and "a" in nav_c1.direction_keys
+        print(f"[TEST 38a] Off-Screen Chest Badge Detection & Steering: mode={nav_c1.mode}, keys={nav_c1.direction_keys}, angle={nav_c1.heading_angle_deg}°")
+
+        # 38b. On-Screen Physical Chest Detection & Approaching
+        spatial_chest.reset()
+        res_c2 = chest_det.detect(im_c2)
+        assert res_c2.is_active and res_c2.mode == "onscreen_chest"
+        assert res_c2.target_point is not None and 350 <= res_c2.target_point[0] <= 390
+        nav_c2 = spatial_chest.analyze(im_c2)
+        assert nav_c2.mode == "chest_push" and "a" in nav_c2.direction_keys
+        print(f"[TEST 38b] On-Screen Physical Chest Tracking: target={res_c2.target_point}, mode={nav_c2.mode}, keys={nav_c2.direction_keys}")
+
+        # 38c. Stationary Channeling State (Distance <= 50px & Zero Keys)
+        spatial_chest.reset()
+        res_c3 = chest_det.detect(im_c3)
+        assert res_c3.is_active and res_c3.mode == "channeling"
+        assert len(res_c3.direction_keys) == 0
+        nav_c3 = spatial_chest.analyze(im_c3)
+        assert nav_c3.mode == "chest_channel" and len(nav_c3.direction_keys) == 0
+        print(f"[TEST 38c] Chest Stationary Channeling Hold: mode={nav_c3.mode}, keys={nav_c3.direction_keys} (STAY STILL verified)")
+
+        # 38d. Despawned / Inactive Chest State
+        spatial_chest.reset()
+        res_c4 = chest_det.detect(im_c4)
+        assert not res_c4.is_active
+        nav_c4 = spatial_chest.analyze(im_c4)
+        assert nav_c4.mode in ("patrol", "gem_hunting", "kiting_evasion")
+        print(f"[TEST 38d] Chest Despawn Resolution: is_active={res_c4.is_active}, mode={nav_c4.mode}")
+
+        # 38e. Pre-Channel Conflict Arbitration: Rift overrides Chest
+        spatial_chest.reset()
+        nav_rift_wins = spatial_chest.analyze(im_c1, rift_direction_keys=["w", "d"], rift_angle=-45.0)
+        assert nav_rift_wins.mode == "rift_push" and "d" in nav_rift_wins.direction_keys
+        print(f"[TEST 38e] Pre-Channel Conflict (Rift Priority Override): mode={nav_rift_wins.mode}, keys={nav_rift_wins.direction_keys}")
+
+        # 38f. Active Channel Conflict Arbitration: Finish Chest First!
+        spatial_chest.reset()
+        _ = spatial_chest.analyze(im_c3)  # enter channeling
+        nav_hold_chest = spatial_chest.analyze(im_c3, rift_direction_keys=["s"], rift_angle=90.0)
+        assert nav_hold_chest.mode == "chest_channel" and len(nav_hold_chest.direction_keys) == 0
+        print(f"[TEST 38f] Active Channel Conflict (Finish Chest First Rule): mode={nav_hold_chest.mode}, keys={nav_hold_chest.direction_keys}")
+
+        # 38g. Post-Channel Pivot: Fast-forward to completion, then immediately push Rift
+        spatial_chest.chest_channel_start = time.monotonic() - 7.0
+        nav_post_pivot = spatial_chest.analyze(im_c4, rift_direction_keys=["s"], rift_angle=90.0)
+        assert nav_post_pivot.mode == "rift_push" and "s" in nav_post_pivot.direction_keys
+        print(f"[TEST 38g] Post-Channel Seamless Pivot to Queued Rift: mode={nav_post_pivot.mode}, keys={nav_post_pivot.direction_keys}")
+
     print("\n================================================================================")
-    print("ALL 41 VERIFICATION TESTS (GAMEPLAY, MODALS, RIFTS, DYNAMIC ARROW, MEMORY, UNSTUCK, TIMER, AUTO LEVEL, RESTART, SPATIAL AI, IPC EXPIRATION, TOP EDGE RIFT, MOTION TRACKER LIFECYCLE, RIFT OBSTACLE BYPASS, MENU CLICK THROTTLING, KECLEON SHOP EXIT 4, CURSOR HIJACK ELIMINATION, PLAY BUTTON INPUT PIPELINE, YOU FELL BACK-TO-MENU, SPLIT YELLOW PLAY BUTTON, DYNAMIC 10-REGION SELECTOR & SINNOH LOOP) PASSED!")
+    print("ALL 42 VERIFICATION TESTS (GAMEPLAY, MODALS, RIFTS, DYNAMIC ARROW, MEMORY, UNSTUCK, TIMER, AUTO LEVEL, RESTART, SPATIAL AI, IPC EXPIRATION, TOP EDGE RIFT, MOTION TRACKER LIFECYCLE, RIFT OBSTACLE BYPASS, MENU CLICK THROTTLING, KECLEON SHOP EXIT 4, CURSOR HIJACK ELIMINATION, PLAY BUTTON INPUT PIPELINE, YOU FELL BACK-TO-MENU, SPLIT YELLOW PLAY BUTTON, DYNAMIC 10-REGION SELECTOR, SINNOH LOOP & CHEST NAVIGATION STATE MACHINE) PASSED!")
     print("================================================================================")
 
 

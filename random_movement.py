@@ -235,8 +235,10 @@ def movement_loop() -> None:
                     res: SpatialNavResult = spatial_nav.analyze(frame, rift_direction_keys=rift_keys, rift_angle=rift_angle)
                     target_keys = set(res.direction_keys)
 
-                    # Immediate key flush on rift push transition to guarantee no residual directional keys stick
-                    if (res.mode == "rift_push" and last_mode != "rift_push") or (last_mode == "rift_push" and res.mode != "rift_push"):
+                    # Immediate key flush on rift push / chest channel transition to guarantee no residual directional keys stick
+                    if (res.mode in ("rift_push", "chest_channel") and last_mode not in ("rift_push", "chest_channel")) or (
+                        last_mode in ("rift_push", "chest_channel") and res.mode not in ("rift_push", "chest_channel")
+                    ):
                         release_all_keys()
                         active_keys_held.clear()
 
@@ -244,7 +246,7 @@ def movement_loop() -> None:
                         last_rift_time = time.monotonic()
 
                     now = time.monotonic()
-                    if res.mode != last_mode or (now - last_mode_log_time > 8.0):
+                    if res.mode != last_mode or (res.mode == "chest_channel" and now - last_mode_log_time >= 1.5) or (now - last_mode_log_time > 8.0):
                         last_mode = res.mode
                         last_mode_log_time = now
                         if res.mode == "kiting_evasion":
@@ -253,6 +255,12 @@ def movement_loop() -> None:
                             print(f"[AI GEMS] Vacuuming {res.gems_detected} XP gems -> Steering: {res.direction_keys} (Heading: {res.heading_angle_deg}°)")
                         elif res.mode == "rift_push":
                             print(f"[AI RIFT - TOP PRIORITY] Dynamically tracking Rift Arrow / Portal: {res.direction_keys} (Heading: {res.heading_angle_deg}°)")
+                        elif res.mode == "chest_channel":
+                            elapsed = now - getattr(spatial_nav, "chest_channel_start", now)
+                            total_h = getattr(spatial_nav, "chest_hold_duration", 6.5)
+                            print(f"[AI CHEST - CHANNELING] Standing still on chest: {elapsed:.1f}s / {total_h:.1f}s [Protected!]")
+                        elif res.mode == "chest_push":
+                            print(f"[AI CHEST] Moving to chest: {res.direction_keys} (Heading: {res.heading_angle_deg}°)")
                         elif res.mode == "unstuck_escape":
                             print(f"[AI UNSTUCK] Obstacle detected! Sliding {res.direction_keys} (Heading: {res.heading_angle_deg}°) to bypass obstacle")
                         elif res.mode == "patrol":

@@ -26,7 +26,7 @@ import time
 from dataclasses import dataclass, field
 import cv2
 import numpy as np
-from level_detector import RiftDetector
+from level_detector import ChestDetector, ChestResult, RiftDetector
 
 
 @dataclass
@@ -34,7 +34,7 @@ class SpatialNavResult:
     """Output of spatial navigation frame evaluation."""
     direction_keys: list[str] = field(default_factory=list)
     heading_angle_deg: float = 0.0
-    mode: str = "patrol"  # "kiting_evasion", "gem_hunting", "rift_push", "patrol", "unstuck_escape"
+    mode: str = "patrol"  # "kiting_evasion", "gem_hunting", "rift_push", "patrol", "unstuck_escape", "chest_push", "chest_channel"
     threat_density: dict[str, float] = field(default_factory=dict)
     max_threat_percent: float = 0.0
     gems_detected: int = 0
@@ -78,8 +78,15 @@ class TerrainMotionTracker:
         commanded_keys: list[str],
         now: float,
         is_rift_mode: bool = False,
+        is_chest_channel: bool = False,
     ) -> tuple[bool, list[str], float]:
         """Detect if character is pinned against an obstacle or wall."""
+        if is_chest_channel:
+            self.is_stuck = False
+            self.unstuck_keys = []
+            self.stuck_start_time = None
+            self.same_keys_start_time = now
+            return False, [], last_heading_deg
         # 1. Active escape maneuver execution window:
         # Once the 0.65s escape maneuver finishes, immediately reset is_stuck to False so bot NEVER stays trapped!
         if self.is_stuck and now >= self.unstuck_until_time:
@@ -199,6 +206,17 @@ class SpatialNavigator:
         self.rift_weight = rift_weight
         self.danger_threshold = danger_threshold
         self.rift_detector = RiftDetector()
+        self.chest_detector = ChestDetector()
+
+        self.chest_state: str = "idle"  # "idle", "approach", "channeling", "cooldown"
+        self.chest_channel_start: float = 0.0
+        self.chest_hold_duration: float = 6.5
+        self.chest_cooldown_until: float = 0.0
+        self.chest_cooldown_seconds: float = 3.0
+        self.last_known_chest_keys: list[str] = []
+        self.last_known_chest_angle: float | None = None
+        self.last_chest_seen_time: float = 0.0
+        self.chest_grace_period: float = 1.5
 
         # Sector unit vectors: (vx, vy)
         self.sector_vectors = {
@@ -264,6 +282,12 @@ class SpatialNavigator:
         self.last_known_rift_keys = []
         self.last_known_rift_angle = None
         self.last_rift_seen_time = 0.0
+        self.chest_state = "idle"
+        self.chest_channel_start = 0.0
+        self.chest_cooldown_until = 0.0
+        self.last_known_chest_keys = []
+        self.last_known_chest_angle = None
+        self.last_chest_seen_time = 0.0
 
     def find_portal(self, norm: np.ndarray) -> tuple[bool, list[str], float, tuple[int, int] | None]:
         """Detect physical rift portal directly on normalized frame."""
@@ -361,6 +385,31 @@ class SpatialNavigator:
             active_rift_mode = None
             active_rift_pt = None
             self.last_known_rift_keys = []
+
+        # ---------------------------------------------------------
+        # 0b. Autonomous Live Chest Detection (Physical Chest, Badge, Channeling)
+        # ---------------------------------------------------------
+        live_chest = self.chest_detector.detect(norm)
+        if now < self.chest_cooldown_until:
+            active_chest = None
+            self.last_known_chest_keys = []
+        elif live_chest.is_active:
+            active_chest = live_chest
+            if live_chest.direction_keys:
+                self.last_known_chest_keys = list(live_chest.direction_keys)
+                self.last_known_chest_angle = live_chest.angle_deg
+                self.last_chest_seen_time = now
+        elif self.last_known_chest_keys and (now - self.last_chest_seen_time < self.chest_grace_period):
+            active_chest = ChestResult(
+                is_active=True,
+                mode="offscreen_badge",
+                direction_keys=self.last_known_chest_keys,
+                angle_deg=self.last_known_chest_angle,
+                confidence=0.7,
+            )
+        else:
+            active_chest = None
+            self.last_known_chest_keys = []
 
         # ---------------------------------------------------------
         # 1. Threat Detection & Sector Density in Danger Zone
@@ -490,15 +539,88 @@ class SpatialNavigator:
             F_bounds[0] -= 0.8
 
         # ---------------------------------------------------------
-        # 5. Composite Potential Field Vector
+        # 5. Composite Potential Field Vector & State Machine
         # ---------------------------------------------------------
+        # Active Channeling Rule: "finish the chest first"
+        if self.chest_state == "channeling":
+            elapsed = now - self.chest_channel_start
+            chest_despawned = (active_chest is None or not active_chest.is_active or active_chest.mode == "none") and (elapsed >= 2.5)
+            if elapsed >= self.chest_hold_duration or chest_despawned:
+                # Finished opening chest!
+                self.chest_state = "cooldown"
+                self.chest_cooldown_until = now + self.chest_cooldown_seconds
+                self.last_known_chest_keys = []
+                active_chest = None
+            else:
+                # Still channeling: hold position completely still!
+                self.last_valid_keys = []
+                self.motion_tracker.update(
+                    norm,
+                    last_heading_deg=0.0,
+                    commanded_keys=[],
+                    now=now,
+                    is_chest_channel=True,
+                )
+                return SpatialNavResult(
+                    direction_keys=[],
+                    heading_angle_deg=0.0,
+                    mode="chest_channel",
+                    threat_density=threat_density,
+                    max_threat_percent=round(max_threat, 1),
+                    gems_detected=0,
+                    vector=(0.0, 0.0),
+                )
+
         mode = "patrol"
         F_total = np.zeros(2, dtype=np.float32)
 
         if active_rift_keys:
             # TOP PRIORITY: Pure direct push into Rift Portal / along dynamic compass arrow!
+            if self.chest_state == "approach":
+                self.chest_state = "idle"
             mode = "rift_push"
             F_total = F_rift * 5.0
+        elif active_chest is not None and active_chest.is_active:
+            # SECOND PRIORITY: Chest Navigation & Arrival
+            if active_chest.mode == "channeling":
+                # Arrived directly on chest: start stationary channeling!
+                self.chest_state = "channeling"
+                self.chest_channel_start = now
+                self.last_valid_keys = []
+                self.motion_tracker.update(
+                    norm,
+                    last_heading_deg=0.0,
+                    commanded_keys=[],
+                    now=now,
+                    is_chest_channel=True,
+                )
+                return SpatialNavResult(
+                    direction_keys=[],
+                    heading_angle_deg=0.0,
+                    mode="chest_channel",
+                    threat_density=threat_density,
+                    max_threat_percent=round(max_threat, 1),
+                    gems_detected=0,
+                    vector=(0.0, 0.0),
+                )
+            else:
+                self.chest_state = "approach"
+                mode = "chest_push"
+                F_chest = np.zeros(2, dtype=np.float32)
+                if active_chest.angle_deg is not None:
+                    rad_c = math.radians(active_chest.angle_deg)
+                    F_chest = np.array([math.cos(rad_c), math.sin(rad_c)], dtype=np.float32)
+                elif active_chest.direction_keys:
+                    for ck in active_chest.direction_keys:
+                        if ck in self.sector_vectors:
+                            F_chest += self.sector_vectors[ck]
+                    norm_c = np.linalg.norm(F_chest)
+                    if norm_c > 0:
+                        F_chest /= norm_c
+                else:
+                    F_chest = np.array([1.0, 0.0], dtype=np.float32)
+
+                F_total = F_chest * 4.0 + F_bounds * 0.5
         elif max_threat >= self.danger_threshold:
             # Enemy swarm / boss proximity -> Evasion and Kiting
             mode = "kiting_evasion"
@@ -526,8 +648,8 @@ class SpatialNavigator:
             if not self.initialized:
                 self.smoothed_vector = u_target.copy()
                 self.initialized = True
-            elif mode == "rift_push":
-                # Instant responsive tracking to dynamic rift compass arrow / portal tear (no lag)
+            elif mode in ("rift_push", "chest_push"):
+                # Instant responsive tracking to dynamic rift compass arrow / chest / portal tear (no lag)
                 self.smoothed_vector = u_target.copy()
             else:
                 self.smoothed_vector = (self.smoothing_alpha * u_target) + ((1.0 - self.smoothing_alpha) * self.smoothed_vector)
@@ -547,7 +669,8 @@ class SpatialNavigator:
             last_heading_deg=angle_deg,
             commanded_keys=keys,
             now=now,
-            is_rift_mode=(mode == "rift_push"),
+            is_rift_mode=(mode in ("rift_push", "chest_push")),
+            is_chest_channel=(mode == "chest_channel"),
         )
 
         if is_stuck and unstuck_keys:

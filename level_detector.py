@@ -98,6 +98,20 @@ class RiftResult:
 
 
 @dataclass
+class ChestResult:
+    """Result of chest detection and navigation vector calculation."""
+    is_active: bool
+    mode: str = "none"  # "onscreen_chest", "offscreen_badge", "channeling", or "none"
+    direction_keys: list[str] = field(default_factory=list)
+    angle_deg: float | None = None
+    target_point: tuple[int, int] | None = None
+    distance_to_player: float | None = None
+    confidence: float = 0.0
+    scores: dict[str, float] = field(default_factory=dict)
+    timestamp: float = field(default_factory=time.monotonic)
+
+
+@dataclass
 class GameTimerResult:
     """Result of in-game timer detection at top center."""
     detected: bool = False
@@ -603,6 +617,190 @@ class RiftDetector:
             return ["w", "d"], round(angle, 1)
 
         return ["d"], round(angle, 1)
+
+
+class ChestDetector:
+    """Detects in-game chests (off-screen HUD indicator and on-screen physical chest/channeling)."""
+
+    def __init__(self, templates_dir: Path | str | None = None, confidence_threshold: float = 0.65) -> None:
+        if templates_dir is None:
+            templates_dir = Path(__file__).resolve().parent / "templates"
+        self.templates_dir = Path(templates_dir)
+        self.conf_threshold = confidence_threshold
+
+        self.tpl_tag = self._load_template("chest_tag.png")
+        self.tpl_lock_badge = self._load_template("chest_lock_badge.png")
+        self.tpl_word = self._load_template("chest_word.png")
+        self.tpl_entity = self._load_template("chest_entity.png")
+        self.tpl_core = self._load_template("chest_core.png")
+        self.tpl_protected = self._load_template("protected_word.png")
+
+    def _load_template(self, filename: str) -> np.ndarray | None:
+        path = self.templates_dir / filename
+        if not path.exists():
+            return None
+        return cv2.imread(str(path))
+
+    def _calc_direction(self, target_pt: tuple[int, int], w: int, h: int) -> tuple[list[str], float]:
+        cx, cy = w // 2, int(h * 0.48)
+        dx = target_pt[0] - cx
+        dy = target_pt[1] - cy
+        angle = math.degrees(math.atan2(dy, dx))
+
+        if -22.5 <= angle < 22.5:
+            return ["d"], round(angle, 1)
+        elif 22.5 <= angle < 67.5:
+            return ["s", "d"], round(angle, 1)
+        elif 67.5 <= angle < 112.5:
+            return ["s"], round(angle, 1)
+        elif 112.5 <= angle < 157.5:
+            return ["s", "a"], round(angle, 1)
+        elif angle >= 157.5 or angle < -157.5:
+            return ["a"], round(angle, 1)
+        elif -157.5 <= angle < -112.5:
+            return ["w", "a"], round(angle, 1)
+        elif -112.5 <= angle < -67.5:
+            return ["w"], round(angle, 1)
+        elif -67.5 <= angle < -22.5:
+            return ["w", "d"], round(angle, 1)
+
+        return ["d"], round(angle, 1)
+
+    def detect(self, frame: np.ndarray) -> ChestResult:
+        """Detect in-game chest state and compute navigation / stationary hold commands."""
+        h, w = frame.shape[:2]
+        if w == 0 or h == 0:
+            return ChestResult(is_active=False)
+
+        target_w = 1024
+        target_h = int(h * (target_w / w))
+        norm = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_AREA)
+
+        # 0. Check overall screen black ratio: menus and modals have > 30% black void
+        v_all = np.max(norm, axis=2)
+        black_ratio = (v_all < 15).sum() / (target_w * target_h)
+        scores: dict[str, float] = {"black_ratio": round(float(black_ratio), 4)}
+        if black_ratio > 0.30:
+            return ChestResult(is_active=False, mode="none", direction_keys=[], scores=scores)
+
+        # Mask out UI overlays (top bar, player card, bottom banner)
+        play_mask = np.ones((target_h, target_w), dtype=np.uint8) * 255
+        play_mask[:220, :320] = 0        # Top-left player stats card
+        play_mask[:80, :] = 0            # Top timer & rift status bar
+        play_mask[615:, :] = 0           # Bottom task banner
+        play = norm.copy()
+        play[play_mask == 0] = 0
+
+        player_center = (target_w // 2, int(target_h * 0.48))
+
+        # 1. Active Channeling Check ('Protected!' text above player)
+        max_v_prot = 0.0
+        if self.tpl_protected is not None and play.shape[0] >= self.tpl_protected.shape[0] and play.shape[1] >= self.tpl_protected.shape[1]:
+            res_prot = cv2.matchTemplate(play, self.tpl_protected, cv2.TM_CCOEFF_NORMED)
+            _, max_v_prot, _, _ = cv2.minMaxLoc(res_prot)
+            scores["protected_text"] = round(float(max_v_prot), 4)
+
+        if max_v_prot >= 0.75:
+            return ChestResult(
+                is_active=True,
+                mode="channeling",
+                direction_keys=[],  # STAY STILL
+                angle_deg=0.0,
+                target_point=player_center,
+                distance_to_player=0.0,
+                confidence=round(float(max_v_prot), 4),
+                scores=scores,
+            )
+
+        # 2. On-Screen Physical Chest Detection
+        max_v_chest = 0.0
+        best_chest_loc = (0, 0)
+        if self.tpl_entity is not None and play.shape[0] >= self.tpl_entity.shape[0] and play.shape[1] >= self.tpl_entity.shape[1]:
+            res_c = cv2.matchTemplate(play, self.tpl_entity, cv2.TM_CCOEFF_NORMED)
+            _, max_v_chest, _, best_chest_loc = cv2.minMaxLoc(res_c)
+            scores["chest_entity"] = round(float(max_v_chest), 4)
+
+        if max_v_chest >= 0.70:
+            cx = best_chest_loc[0] + self.tpl_entity.shape[1] // 2
+            cy = best_chest_loc[1] + self.tpl_entity.shape[0] // 2
+            dist = float(np.hypot(cx - player_center[0], cy - player_center[1]))
+            scores["distance_to_player"] = round(dist, 1)
+
+            # Within arrival radius (<= 50px) -> CHANNELING
+            if dist <= 50.0:
+                return ChestResult(
+                    is_active=True,
+                    mode="channeling",
+                    direction_keys=[],  # STAY STILL
+                    angle_deg=0.0,
+                    target_point=(cx, cy),
+                    distance_to_player=dist,
+                    confidence=round(float(max_v_chest), 4),
+                    scores=scores,
+                )
+            else:
+                keys, angle = self._calc_direction((cx, cy), target_w, target_h)
+                return ChestResult(
+                    is_active=True,
+                    mode="onscreen_chest",
+                    direction_keys=keys,
+                    angle_deg=angle,
+                    target_point=(cx, cy),
+                    distance_to_player=dist,
+                    confidence=round(float(max_v_chest), 4),
+                    scores=scores,
+                )
+
+        # 3. Off-Screen Chest Badge Detection (HUD edge indicator)
+        max_v_tag = 0.0
+        best_tag_loc = (0, 0)
+        if self.tpl_tag is not None and play.shape[0] >= self.tpl_tag.shape[0] and play.shape[1] >= self.tpl_tag.shape[1]:
+            res_tag = cv2.matchTemplate(play, self.tpl_tag, cv2.TM_CCOEFF_NORMED)
+            _, max_v_tag, _, best_tag_loc = cv2.minMaxLoc(res_tag)
+            scores["chest_tag"] = round(float(max_v_tag), 4)
+
+        max_v_badge = 0.0
+        best_badge_loc = (0, 0)
+        if self.tpl_lock_badge is not None and play.shape[0] >= self.tpl_lock_badge.shape[0] and play.shape[1] >= self.tpl_lock_badge.shape[1]:
+            res_badge = cv2.matchTemplate(play, self.tpl_lock_badge, cv2.TM_CCOEFF_NORMED)
+            _, max_v_badge, _, best_badge_loc = cv2.minMaxLoc(res_badge)
+            scores["chest_lock_badge"] = round(float(max_v_badge), 4)
+
+        if max_v_tag >= 0.70 or max_v_badge >= 0.75:
+            if max_v_tag >= 0.70 and self.tpl_tag is not None:
+                bx = best_tag_loc[0] + self.tpl_tag.shape[1] // 2
+                by = best_tag_loc[1] + self.tpl_tag.shape[0] // 2
+                conf = max_v_tag
+            elif self.tpl_lock_badge is not None:
+                bx = best_badge_loc[0] + self.tpl_lock_badge.shape[1] // 2
+                by = best_badge_loc[1] + self.tpl_lock_badge.shape[0] // 2
+                conf = max_v_badge
+            else:
+                bx, by, conf = 0, 0, 0.0
+
+            keys, angle = self._calc_direction((bx, by), target_w, target_h)
+            dist = float(np.hypot(bx - player_center[0], by - player_center[1]))
+            return ChestResult(
+                is_active=True,
+                mode="offscreen_badge",
+                direction_keys=keys,
+                angle_deg=angle,
+                target_point=(bx, by),
+                distance_to_player=dist,
+                confidence=round(float(conf), 4),
+                scores=scores,
+            )
+
+        return ChestResult(
+            is_active=False,
+            mode="none",
+            direction_keys=[],
+            angle_deg=None,
+            target_point=None,
+            distance_to_player=None,
+            confidence=round(max(max_v_chest, max_v_tag, max_v_badge, max_v_prot), 4),
+            scores=scores,
+        )
 
 
 class GameTimerDetector:
